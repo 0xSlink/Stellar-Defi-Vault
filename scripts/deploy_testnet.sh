@@ -74,3 +74,29 @@ echo "CONTRACT_ID=$CONTRACT_ID"
 echo "TOKEN_ID=$TOKEN_ID"
 echo "IDENTITY=$IDENTITY"
 echo "NETWORK=$NETWORK"
+
+# 6. Deploy Testnet Faucet Contract (issue #891)
+echo "Building and deploying test faucet contract..."
+FAUCET_WASM="target/wasm32v1-none/release/test_faucet.wasm"
+if [ -d "contracts/test-faucet" ]; then
+    (cd contracts/test-faucet && stellar contract build --optimize)
+    if [ -f "$FAUCET_WASM" ]; then
+        FAUCET_ID=$(stellar contract deploy \
+            --wasm "$FAUCET_WASM" \
+            --source "$IDENTITY" \
+            --network "$NETWORK")
+        echo "Initializing faucet contract..."
+        stellar contract invoke \
+            --id "$FAUCET_ID" \
+            --source "$IDENTITY" \
+            --network "$NETWORK" \
+            -- initialize \
+            --admin "$IDENTITY_ADDRESS" \
+            --token "$TOKEN_ID" \
+            --claim_amount 10000000000 \
+            --cooldown_ledgers 17280
+        echo "Faucet Contract ID: $FAUCET_ID"
+        echo "FAUCET_ID=$FAUCET_ID" >> .env
+    fi
+fi
+

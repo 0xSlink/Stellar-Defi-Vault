@@ -484,6 +484,11 @@ Reward accrual now utilizes the standard accumulator pattern: a global `reward_p
   `i128::MAX / (5 * 10^32) ≈ 340,282` (> 340,000x safety headroom)
   The accumulator is mathematically incapable of overflowing under any realistic protocol lifetime and parameters.
 
+
+## Testnet Token Faucet
+
+For testing and local demonstrations without manual minting, a rate-limited faucet contract is available in `contracts/test-faucet`. It is deployed alongside the vault when running `scripts/deploy_testnet.sh`. Note that it is gated with a compile-time check preventing deployment on mainnet.
+
 ## License
 
 [MIT](./LICENSE)
