@@ -173,3 +173,7 @@ mod test_issues_770_upgrade;
 // â”€â”€ Issue #769: differential tests with reference math models â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 #[cfg(test)]
 mod test_issues_769_differential;
+
+// ── Issue #843: ProposalState enum and get_proposal_state ──────
+#[cfg(test)]
+mod test_issue_843;

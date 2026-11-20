@@ -15197,3 +15197,5 @@ pub mod vote_change;
 pub mod proposal_cancel;
 #[path = "proposal_requirements.rs"]
 pub mod proposal_requirements;
+#[path = "proposal_state.rs"]
+pub mod proposal_state;
