@@ -4540,3 +4540,177 @@ fn test_withdraw_boundary_i128_max_rejected_as_insufficient_shares() {
     );
 }
 
+
+// ── fund_reward_pool ──────────────────────────────────────────────────────────
+
+#[test]
+fn test_fund_reward_pool_boundary_zero_rejected() {
+    let f = VaultFixture::new();
+    // Set up a reward token first.
+    let (reward_addr, _reward, reward_admin) = create_token(&f.env, &f.admin);
+    f.vault.set_reward_token(&f.admin, &reward_addr);
+    reward_admin.mint(&f.admin, &1_000_000);
+    assert_eq!(
+        f.vault.try_fund_reward_pool(&f.admin, &0).unwrap_err().unwrap(),
+        VaultError::ZeroAmount
+    );
+}
+
+#[test]
+fn test_fund_reward_pool_boundary_negative_rejected() {
+    let f = VaultFixture::new();
+    let (reward_addr, _reward, reward_admin) = create_token(&f.env, &f.admin);
+    f.vault.set_reward_token(&f.admin, &reward_addr);
+    reward_admin.mint(&f.admin, &1_000_000);
+    let err = f.vault.try_fund_reward_pool(&f.admin, &-1).unwrap_err().unwrap();
+    assert!(
+        err == VaultError::ZeroAmount || err == VaultError::InvalidRewardAmount,
+        "unexpected error for negative fund_reward_pool: {:?}",
+        err
+    );
+}
+
+#[test]
+fn test_fund_reward_pool_boundary_i128_min_rejected() {
+    let f = VaultFixture::new();
+    let (reward_addr, _reward, reward_admin) = create_token(&f.env, &f.admin);
+    f.vault.set_reward_token(&f.admin, &reward_addr);
+    reward_admin.mint(&f.admin, &1_000_000);
+    let err = f.vault.try_fund_reward_pool(&f.admin, &i128::MIN).unwrap_err().unwrap();
+    assert!(
+        err == VaultError::ZeroAmount || err == VaultError::InvalidRewardAmount,
+        "unexpected error for i128::MIN fund_reward_pool: {:?}",
+        err
+    );
+}
+
+#[test]
+fn test_fund_reward_pool_boundary_one_succeeds() {
+    let f = VaultFixture::new();
+    let (reward_addr, _reward, reward_admin) = create_token(&f.env, &f.admin);
+    f.vault.set_reward_token(&f.admin, &reward_addr);
+    reward_admin.mint(&f.admin, &1_000_000);
+    assert!(f.vault.try_fund_reward_pool(&f.admin, &1).is_ok());
+}
+
+// ── set_min_stake ─────────────────────────────────────────────────────────────
+
+#[test]
+fn test_set_min_stake_boundary_zero_rejected() {
+    let f = VaultFixture::new();
+    assert_eq!(
+        f.vault.try_set_min_stake(&0).unwrap_err().unwrap(),
+        VaultError::ZeroAmount
+    );
+}
+
+#[test]
+fn test_set_min_stake_boundary_negative_rejected() {
+    let f = VaultFixture::new();
+    assert_eq!(
+        f.vault.try_set_min_stake(&-1).unwrap_err().unwrap(),
+        VaultError::ZeroAmount
+    );
+}
+
+#[test]
+fn test_set_min_stake_boundary_i128_min_rejected() {
+    let f = VaultFixture::new();
+    assert_eq!(
+        f.vault.try_set_min_stake(&i128::MIN).unwrap_err().unwrap(),
+        VaultError::ZeroAmount
+    );
+}
+
+#[test]
+fn test_set_min_stake_boundary_one_succeeds() {
+    let f = VaultFixture::new();
+    assert!(f.vault.try_set_min_stake(&1).is_ok());
+}
+
+#[test]
+fn test_set_min_stake_boundary_i128_max_minus_one_accepted_or_typed_error() {
+    let f = VaultFixture::new();
+    let result = f.vault.try_set_min_stake(&(i128::MAX - 1));
+    match result {
+        Ok(_) => {}
+        Err(Ok(e)) => {
+            assert!(
+                e == VaultError::ArithmeticError || e == VaultError::InvalidRate,
+                "unexpected typed error for i128::MAX-1 set_min_stake: {:?}", e
+            );
+        }
+        Err(Err(_)) => panic!("unexpected SDK error (panic) for i128::MAX-1 set_min_stake"),
+    }
+}
+
+// ── set_pool_cap ──────────────────────────────────────────────────────────────
+
+#[test]
+fn test_set_pool_cap_boundary_zero_rejected() {
+    let f = VaultFixture::new();
+    assert_eq!(
+        f.vault.try_set_pool_cap(&0).unwrap_err().unwrap(),
+        VaultError::ZeroAmount
+    );
+}
+
+#[test]
+fn test_set_pool_cap_boundary_i128_min_rejected() {
+    let f = VaultFixture::new();
+    let err = f.vault.try_set_pool_cap(&i128::MIN).unwrap_err().unwrap();
+    assert!(
+        err == VaultError::ZeroAmount || err == VaultError::ArithmeticError,
+        "unexpected error for i128::MIN set_pool_cap: {:?}", err
+    );
+}
+
+#[test]
+fn test_set_pool_cap_boundary_one_succeeds() {
+    let f = VaultFixture::new();
+    assert!(f.vault.try_set_pool_cap(&1).is_ok());
+}
+
+#[test]
+fn test_set_pool_cap_boundary_i128_max_accepted_or_typed_error() {
+    let f = VaultFixture::new();
+    let result = f.vault.try_set_pool_cap(&i128::MAX);
+    match result {
+        Ok(_) => {}
+        Err(Ok(e)) => {
+            assert!(
+                e == VaultError::ArithmeticError || e == VaultError::InvalidRate,
+                "unexpected typed error for i128::MAX set_pool_cap: {:?}", e
+            );
+        }
+        Err(Err(_)) => panic!("unexpected SDK error (panic) for i128::MAX set_pool_cap"),
+    }
+}
+
+// ── set_withdrawal_limit (amount setter) ─────────────────────────────────────
+
+#[test]
+fn test_set_withdrawal_limit_boundary_i128_max_minus_one_no_panic() {
+    let f = VaultFixture::new();
+    let result = f.vault.try_set_withdrawal_limit(&(i128::MAX - 1));
+    match result {
+        Ok(_) => {}
+        Err(Ok(e)) => {
+            assert!(
+                e == VaultError::ArithmeticError || e == VaultError::ZeroAmount,
+                "unexpected typed error for i128::MAX-1 set_withdrawal_limit: {:?}", e
+            );
+        }
+        Err(Err(_)) => panic!("unexpected SDK error for i128::MAX-1 set_withdrawal_limit"),
+    }
+}
+
+#[test]
+fn test_set_withdrawal_limit_boundary_i128_min_rejected() {
+    let f = VaultFixture::new();
+    let err = f.vault.try_set_withdrawal_limit(&i128::MIN).unwrap_err().unwrap();
+    assert!(
+        err == VaultError::ZeroAmount || err == VaultError::ArithmeticError,
+        "unexpected error for i128::MIN set_withdrawal_limit: {:?}", err
+    );
+}
