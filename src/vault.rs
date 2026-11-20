@@ -600,14 +600,20 @@ impl VaultContract {
     /// # Authorization
     /// `admin` must equal the stored admin **and** sign.
     ///
+    /// Disabled once an upgrader is configured (`set_upgrader`): upgrades must
+    /// then go through `queue_upgrade` / `execute_upgrade`, which enforce a delay.
+    ///
     /// # Errors
     /// - `NotInitialized`: no admin is stored.
-    /// - `Unauthorized`: `admin` is not the stored admin.
+    /// - `Unauthorized`: `admin` is not the stored admin, or an upgrader is configured.
     ///
     /// # Events
     /// - Topic `("upgrade",)` with data `(admin, new_wasm_hash, ledger_sequence)`.
     pub fn upgrade_wasm(env: Env, admin: Address, new_wasm_hash: soroban_sdk::BytesN<32>) -> Result<(), VaultError> {
         if admin != admin::get_admin(&env)? {
+            return Err(VaultError::Unauthorized);
+        }
+        if crate::upgrade_queue::get_upgrader(&env).is_some() {
             return Err(VaultError::Unauthorized);
         }
         admin.require_auth();

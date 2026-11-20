@@ -1342,3 +1342,33 @@ impl From<VaultError> for StrategyError {
         }
     }
 }
+
+/// Errors for the upgrader role and queued Wasm upgrades. `VaultError` is at
+/// Soroban's 50-variant cap, so these get their own enum.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum UpgradeError {
+    /// Caller is not the admin / upgrader / guardian the call requires.
+    Unauthorized = 1,
+    /// No admin is stored.
+    NotInitialized = 2,
+    /// Ledger arithmetic overflowed.
+    ArithmeticError = 3,
+    /// An upgrade is already pending; cancel it before queueing another.
+    UpgradeAlreadyQueued = 4,
+    /// No upgrade is pending.
+    NoUpgradeQueued = 5,
+    /// The upgrade delay has not elapsed yet.
+    UpgradeNotReady = 6,
+}
+
+impl From<VaultError> for UpgradeError {
+    fn from(err: VaultError) -> Self {
+        match err {
+            VaultError::NotInitialized => UpgradeError::NotInitialized,
+            VaultError::ArithmeticError => UpgradeError::ArithmeticError,
+            _ => UpgradeError::Unauthorized,
+        }
+    }
+}
