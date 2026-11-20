@@ -1372,3 +1372,34 @@ impl From<VaultError> for UpgradeError {
         }
     }
 }
+
+/// Errors for the `*_with_reason` admin setter variants. `VaultError` is at
+/// Soroban's 50-variant cap, so these get their own enum.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum ParamReasonError {
+    /// Caller is not the stored admin.
+    Unauthorized = 1,
+    /// No admin is stored.
+    NotInitialized = 2,
+    /// Arithmetic overflowed while applying the change.
+    ArithmeticError = 3,
+    /// The underlying setter rejected the new value (out of range, negative…).
+    InvalidValue = 4,
+    /// A sensitive setter (rates, fees, caps) was called with an empty reason.
+    EmptyReason = 5,
+    /// The reason is longer than `MAX_REASON_LEN` (128) bytes.
+    ReasonTooLong = 6,
+}
+
+impl From<VaultError> for ParamReasonError {
+    fn from(err: VaultError) -> Self {
+        match err {
+            VaultError::Unauthorized => ParamReasonError::Unauthorized,
+            VaultError::NotInitialized | VaultError::NoAdmin => ParamReasonError::NotInitialized,
+            VaultError::ArithmeticError => ParamReasonError::ArithmeticError,
+            _ => ParamReasonError::InvalidValue,
+        }
+    }
+}
