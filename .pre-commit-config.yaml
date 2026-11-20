@@ -1,0 +1,16 @@
+# Optional pre-commit hooks for Stellar-Defi-Vault (#851).
+#
+# Install pre-commit (https://pre-commit.com) and run:
+#   pre-commit install          # wire up the git hook
+#   pre-commit run --all-files  # scan the full tree once
+#
+# The gitleaks hook here mirrors the CI job in
+# .github/workflows/secret-scan.yml so developers catch secrets locally
+# before pushing.
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.4
+    hooks:
+      - id: gitleaks
+        name: Detect secrets with gitleaks
+        args: ["--config", ".gitleaks.toml", "--redact"]
