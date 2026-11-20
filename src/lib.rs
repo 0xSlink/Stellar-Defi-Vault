@@ -48,6 +48,7 @@ pub mod stake_quota;
 pub mod balance_checkpoints; // issues #709, #710 — balance checkpoints and TWAB
 pub mod cross_pool_identity; // issue #470 — cross-pool identity
 pub mod daily_community_tip; // issue #458 — daily stake-weighted featured tip vote
+pub mod deposit_and_lock; // issue #747 — deposit_and_lock() atomic deposit + lock
 pub mod governance_params; // issue #712 — governance quorum and pass threshold
 pub mod lockdrop_campaign; // issue #460 — lockdrop campaign
 pub mod minimum_unstake_amount; // issue #441 — minimum unstake amount
