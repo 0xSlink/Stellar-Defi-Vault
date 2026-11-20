@@ -4714,3 +4714,185 @@ fn test_set_withdrawal_limit_boundary_i128_min_rejected() {
         "unexpected error for i128::MIN set_withdrawal_limit: {:?}", err
     );
 }
+
+// ── Issue #848: storage key collision tests ───────────────────────────────────
+//
+// Every storage key is encoded by Soroban as the XDR of its contracttype value.
+// Two keys with different Rust names but the same XDR encoding would collide
+// silently — a write to one would overwrite the other.
+//
+// These tests verify distinctness by collecting human-readable labels for every
+// key variant (DataKey and NftDataKey) and asserting:
+//   1. No two labels are identical (naming collision — a strong proxy for XDR
+//      collision on the unit variants that make up the majority of keys here).
+//   2. No symbol-based label exceeds 9 characters (Soroban hard limit for
+//      `symbol_short!` — longer strings are silently truncated in XDR).
+//
+// Labels use the form "Enum::Variant(TypeParam)" so a tuple variant and a unit
+// variant with the same base name are always distinct strings.
+
+fn all_data_key_labels() -> std::vec::Vec<std::string::String> {
+    std::vec![
+        "DataKey::Admin".into(),
+        "DataKey::Token".into(),
+        "DataKey::TotalShares".into(),
+        "DataKey::TotalDeposited".into(),
+        "DataKey::MinStake".into(),
+        "DataKey::RewardRateBps".into(),
+        "DataKey::RewardPoolBalance".into(),
+        "DataKey::BoostSchedule".into(),
+        "DataKey::ShareBalance(Address)".into(),
+        "DataKey::StakeHistory(Address)".into(),
+        "DataKey::RewardCheckpointLedger(Address)".into(),
+        "DataKey::LastClaimLedger(Address)".into(),
+        "DataKey::AccruedReward(Address)".into(),
+        "DataKey::Paused".into(),
+        "DataKey::WithdrawalLimit".into(),
+        "DataKey::LockPeriod".into(),
+        "DataKey::EarlyExitPenaltyBps".into(),
+        "DataKey::StakedAtLedger(Address)".into(),
+        "DataKey::TotalStakers".into(),
+        "DataKey::TotalRewardsPaid".into(),
+        "DataKey::Delegate(Address)".into(),
+        "DataKey::LastUnstakeLedger(Address)".into(),
+        "DataKey::TotalEverClaimed".into(),
+        "DataKey::Restaked(Address)".into(),
+        "DataKey::WhitelistEnabled".into(),
+        "DataKey::Whitelisted(Address)".into(),
+        "DataKey::CooldownPeriod".into(),
+        "DataKey::UnbondingPosition(Address)".into(),
+        "DataKey::RewardRemainder(Address)".into(),
+        "DataKey::UserClaimWindow(Address)".into(),
+        "DataKey::UnstakeFeeBps".into(),
+        "DataKey::AllStakers".into(),
+        "DataKey::RateHistory".into(),
+        "DataKey::BoostCampaign".into(),
+        "DataKey::Leaderboard".into(),
+        "DataKey::LeaderboardSize".into(),
+        "DataKey::InactivityThreshold".into(),
+        "DataKey::FrozenAt(Address)".into(),
+        "DataKey::KycRequired".into(),
+        "DataKey::KycApproved(Address)".into(),
+        "DataKey::Stopped".into(),
+        "DataKey::ShuttingDown".into(),
+        "DataKey::FirstStakedAt(Address)".into(),
+        "DataKey::VestingPeriod".into(),
+        "DataKey::VestingEntries(Address)".into(),
+        "DataKey::EpochMode".into(),
+        "DataKey::CurrentEpoch".into(),
+        "DataKey::EpochLedgers".into(),
+        "DataKey::EpochRewardPerEpoch".into(),
+        "DataKey::EpochRewardFactor(u32)".into(),
+    ]
+}
+
+fn all_nft_data_key_labels() -> std::vec::Vec<std::string::String> {
+    std::vec![
+        "NftDataKey::Minter".into(),
+        "NftDataKey::Receipt(Address)".into(),
+    ]
+}
+
+#[test]
+fn storage_keys_are_unique_within_data_key() {
+    extern crate std;
+    use std::collections::HashSet;
+    let labels = all_data_key_labels();
+    let mut seen = HashSet::new();
+    for label in &labels {
+        assert!(
+            seen.insert(label.clone()),
+            "DataKey collision: '{}' appears more than once in the registry",
+            label
+        );
+    }
+}
+
+#[test]
+fn storage_keys_are_unique_within_nft_data_key() {
+    extern crate std;
+    use std::collections::HashSet;
+    let labels = all_nft_data_key_labels();
+    let mut seen = HashSet::new();
+    for label in &labels {
+        assert!(
+            seen.insert(label.clone()),
+            "NftDataKey collision: '{}' appears more than once in the registry",
+            label
+        );
+    }
+}
+
+#[test]
+fn no_data_key_or_nft_data_key_labels_overlap() {
+    // The two enums live in different Soroban contracts and have separate
+    // storage namespaces at runtime, but a label overlap would indicate a
+    // dangerous copy-paste mistake worth catching in review.
+    extern crate std;
+    use std::collections::HashSet;
+    let vault_set: HashSet<_> = all_data_key_labels().into_iter().collect();
+    let nft_set: HashSet<_> = all_nft_data_key_labels().into_iter().collect();
+    let overlap: std::vec::Vec<_> = vault_set.intersection(&nft_set).collect();
+    assert!(
+        overlap.is_empty(),
+        "Label(s) shared by DataKey and NftDataKey — rename one to remove the ambiguity: {:?}",
+        overlap
+    );
+}
+
+#[test]
+fn symbol_short_strings_do_not_exceed_nine_bytes() {
+    // symbol_short! silently truncates strings > 9 ASCII bytes.
+    // Every symbol string used as a storage-key discriminant or event topic
+    // must fit in 9 bytes; a longer string would produce the same XDR as its
+    // first-9-byte prefix, causing silent collisions with any other key that
+    // shares that prefix.
+    let symbol_strings: &[(&str, &str)] = &[
+        // DataKey and NftDataKey variant names (used as XDR discriminants)
+        ("Admin", "DataKey"),
+        ("Token", "DataKey"),
+        ("Paused", "DataKey"),
+        ("Stopped", "DataKey"),
+        ("Minter", "NftDataKey"),
+        ("Receipt", "NftDataKey"),
+        // Event topic symbols from events.rs
+        ("deposit",  "events"),
+        ("withdraw", "events"),
+        ("unpaused", "events"),
+        ("yield_add","events"),
+        ("admin_set","events"),
+        ("wd_limit", "events"),
+        ("rate_chg", "events"),
+        ("cap_upd",  "events"),
+        ("pos_open", "events"),
+        ("pos_clos", "events"),
+        ("tk_rescue","events"),
+        ("adm_act",  "events"),
+        ("slash",    "events"),
+        ("pos_xfer", "events"),
+        ("pos_xf_rw","events"),
+        ("camp_on",  "events"),
+        ("camp_off", "events"),
+        ("auto_rst", "events"),
+        ("auto_ps",  "events"),
+        ("claimed",  "events"),
+        ("init",     "events"),
+        ("frz_pos",  "events"),
+        ("shutdown", "events"),
+        ("desc_upd", "events"),
+        ("merge",    "events"),
+        ("rlyr_set", "events"),
+        ("rlyr_rev", "events"),
+        ("rwd_add",  "events"),
+        ("ys_add",   "events"),
+        ("stopped",  "events"),
+    ];
+    for (s, module) in symbol_strings {
+        assert!(
+            s.len() <= 9,
+            "symbol '{}' (from {}) is {} bytes — exceeds the 9-byte symbol_short! limit; \
+             it will be silently truncated in XDR, potentially causing key collisions.",
+            s, module, s.len()
+        );
+    }
+}
