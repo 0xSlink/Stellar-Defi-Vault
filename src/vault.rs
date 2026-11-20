@@ -1190,6 +1190,7 @@ impl VaultContract {
         if amount > pending {
             return Err(VaultError::InsufficientRewardPool);
         }
+        crate::min_claim_amount::enforce_min_claim(&env, amount, pending)?;
 
         balance::set_accrued_reward(&env, &staker, pending.checked_sub(amount).ok_or(VaultError::ArithmeticError)?);
         let total_paid = balance::get_total_rewards_paid(&env);
@@ -7775,6 +7776,9 @@ impl VaultContract {
             balance::set_last_updated_ledger(env, env.ledger().sequence()); // Issue #69
             return Ok(0);
         }
+
+        // A sub-minimum claim is only allowed when it empties the pending reward.
+        crate::min_claim_amount::enforce_min_claim(env, reward, accrued)?;
 
         let reward_pool = balance::get_reward_pool_balance(env);
         if reward_pool < reward {

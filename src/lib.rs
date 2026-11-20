@@ -50,6 +50,7 @@ pub mod cross_pool_identity; // issue #470 â€” cross-pool identity
 pub mod daily_community_tip; // issue #458 â€” daily stake-weighted featured tip vote
 pub mod governance_params; // issue #712 â€” governance quorum and pass threshold
 pub mod lockdrop_campaign; // issue #460 â€” lockdrop campaign
+pub mod min_claim_amount; // minimum claim amount
 pub mod minimum_unstake_amount; // issue #441 â€” minimum unstake amount
 pub mod peg_stabilization;
 pub mod position_health_auto_recovery; // issue #459 â€” position health auto-recovery

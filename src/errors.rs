@@ -183,6 +183,11 @@ impl VaultError {
     pub const InvalidRewardAmount: VaultError = VaultError::InvalidHashLength;
     /// Backwards compatibility alias for `InvalidTokenInterface`.
     pub const InvalidToken: VaultError = VaultError::InvalidTokenInterface;
+    /// Returned by `claim` / `claim_partial` when the amount is below the
+    /// configured minimum claim and does not empty the pending reward.
+    /// `VaultError` is at the 50-variant cap, so this aliases
+    /// `BelowMinimumStake` (code 11) instead of adding a slot.
+    pub const ClaimBelowMinimum: VaultError = VaultError::BelowMinimumStake;
 }
 
 /// Typed validation failures for public APIs that historically panicked.
