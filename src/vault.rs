@@ -6602,7 +6602,8 @@ impl VaultContract {
             .instance()
             .get(&DataKey::CooldownPeriod)
             .unwrap_or(0);
-        if cooldown > 0 {
+        // A rage-quit window waives the cooldown so users can exit in one step.
+        if cooldown > 0 && !crate::rage_quit::is_active(env) {
             return Err(VaultError::UseCooldownFlow);
         }
 
@@ -6702,6 +6703,9 @@ impl VaultContract {
         // fee from `set_unstake_fee_bps` entirely.
         let unstake_fee_bps = if withdraw_only_mode::is_active(env) {
             // Issue #705: exits are fee-free while the pool is withdraw-only.
+            0
+        } else if crate::rage_quit::is_active(env) {
+            // A rage-quit window is open: exits are fee-free (locks still apply).
             0
         } else if balance::get_dynamic_fee_config(env).is_some() {
             Self::compute_dynamic_fee_bps(env)
@@ -13575,6 +13579,7 @@ impl VaultContract {
         // while the pool is withdraw-only.
         let unstake_fee_bps = if balance::get_sunset_exit_deadline(env).is_some()
             || withdraw_only_mode::is_active(env)
+            || crate::rage_quit::is_active(env)
         {
             0
         } else {
