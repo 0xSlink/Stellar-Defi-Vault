@@ -4431,3 +4431,112 @@ fn test_get_proposal_returns_none_for_unknown_id() {
     let f = VaultFixture::new();
     assert_eq!(f.vault.get_proposal(&999), None);
 }
+
+// ── Issue #847: boundary tests for extreme and invalid amount inputs ──────────
+
+/// Helper: set up a vault, mint large balances to alice and deposit 1 token so
+/// there is at least one share in circulation (needed for withdraw tests).
+fn setup_with_large_balance() -> VaultFixture<'static> {
+    let f = VaultFixture::new();
+    // Mint well above normal to cover i128::MAX-range minting we cannot truly do,
+    // but enough for the extreme-valid tests.
+    f.token_admin.mint(&f.alice, &(i64::MAX as i128));
+    f.token_admin.mint(&f.admin, &(i64::MAX as i128));
+    f
+}
+
+// ── deposit ───────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_deposit_boundary_zero_rejected() {
+    let f = VaultFixture::new();
+    assert_eq!(
+        f.vault.try_deposit(&f.alice, &0).unwrap_err().unwrap(),
+        VaultError::ZeroAmount
+    );
+}
+
+#[test]
+fn test_deposit_boundary_negative_one_rejected() {
+    let f = VaultFixture::new();
+    assert_eq!(
+        f.vault.try_deposit(&f.alice, &-1).unwrap_err().unwrap(),
+        VaultError::ZeroAmount
+    );
+}
+
+#[test]
+fn test_deposit_boundary_i128_min_rejected() {
+    let f = VaultFixture::new();
+    assert_eq!(
+        f.vault.try_deposit(&f.alice, &i128::MIN).unwrap_err().unwrap(),
+        VaultError::ZeroAmount
+    );
+}
+
+#[test]
+fn test_deposit_boundary_one_succeeds() {
+    let f = VaultFixture::new();
+    // alice has 20_000_000 from fixture setup; depositing 1 is valid.
+    assert!(f.vault.try_deposit(&f.alice, &1).is_ok());
+}
+
+// ── withdraw ──────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_withdraw_boundary_zero_rejected() {
+    let f = VaultFixture::new();
+    f.vault.deposit(&f.alice, &1_000);
+    assert_eq!(
+        f.vault.try_withdraw(&f.alice, &0).unwrap_err().unwrap(),
+        VaultError::ZeroAmount
+    );
+}
+
+#[test]
+fn test_withdraw_boundary_negative_one_rejected() {
+    let f = VaultFixture::new();
+    f.vault.deposit(&f.alice, &1_000);
+    assert_eq!(
+        f.vault.try_withdraw(&f.alice, &-1).unwrap_err().unwrap(),
+        VaultError::ZeroAmount
+    );
+}
+
+#[test]
+fn test_withdraw_boundary_i128_min_rejected() {
+    let f = VaultFixture::new();
+    f.vault.deposit(&f.alice, &1_000);
+    // i128::MIN is negative — must be rejected as ZeroAmount (negative-or-zero guard).
+    assert_eq!(
+        f.vault.try_withdraw(&f.alice, &i128::MIN).unwrap_err().unwrap(),
+        VaultError::ZeroAmount
+    );
+}
+
+#[test]
+fn test_withdraw_boundary_more_than_owned_rejected() {
+    let f = VaultFixture::new();
+    f.vault.deposit(&f.alice, &1_000);
+    let shares = f.vault.balance_of(&f.alice);
+    assert_eq!(
+        f.vault.try_withdraw(&f.alice, &(shares + 1)).unwrap_err().unwrap(),
+        VaultError::InsufficientShares
+    );
+}
+
+#[test]
+fn test_withdraw_boundary_i128_max_rejected_as_insufficient_shares() {
+    let f = VaultFixture::new();
+    f.vault.deposit(&f.alice, &1_000);
+    let err = f.vault.try_withdraw(&f.alice, &i128::MAX).unwrap_err().unwrap();
+    // The vault must not panic — it must return a typed error.
+    assert!(
+        err == VaultError::InsufficientShares
+            || err == VaultError::ArithmeticError
+            || err == VaultError::WithdrawalLimitExceeded,
+        "unexpected error variant for i128::MAX withdraw: {:?}",
+        err
+    );
+}
+
