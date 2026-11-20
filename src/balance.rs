@@ -615,9 +615,13 @@ pub fn amount_to_shares_with_decimals(
     if total_shares == 0 || total_deposited == 0 {
         scale_amount(amount, token_decimals, DEFAULT_TOKEN_DECIMALS)
     } else {
-        amount
-            .checked_mul(total_shares)?
-            .checked_div(total_deposited)
+        // Issue #784: `amount * total_shares` can overflow i128 for a large
+        // pool even though the final share count fits comfortably, since
+        // `amount <= total_deposited` in the normal case. `mul_div_floor`
+        // computes the exact 256-bit product first, so it only reports
+        // overflow when the final quotient itself doesn't fit — matching
+        // this function's previous truncating-division (floor) rounding.
+        crate::math::mul_div_floor(amount, total_shares, total_deposited).ok()
     }
 }
 
@@ -637,9 +641,9 @@ pub fn shares_to_amount_with_decimals(
     if total_shares == 0 {
         Some(0)
     } else {
-        shares
-            .checked_mul(total_deposited)?
-            .checked_div(total_shares)
+        // Issue #784: see `amount_to_shares_with_decimals` above — same
+        // overflow-prone pattern, same fix, same preserved floor rounding.
+        crate::math::mul_div_floor(shares, total_deposited, total_shares).ok()
     }
 }
 

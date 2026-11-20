@@ -21,6 +21,7 @@ mod errors;
 mod events;
 pub mod example_consumer;
 pub mod interface;
+mod math;
 pub mod nft;
 pub mod reward_accumulator;
 mod reward_math;

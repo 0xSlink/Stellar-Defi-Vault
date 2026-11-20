@@ -6603,11 +6603,14 @@ impl VaultContract {
             balance::get_unstake_fee_bps(env)
         };
         let unstake_fee = if unstake_fee_bps > 0 {
-            amount_after_penalty
-                .checked_mul(unstake_fee_bps as i128)
-                .ok_or(VaultError::ArithmeticError)?
-                .checked_div(BOOST_BPS_BASE as i128)
-                .ok_or(VaultError::ArithmeticError)?
+            // Issue #784: overflow-safe mul-then-div — see `src/math.rs`.
+            // Same floor rounding as the previous checked_mul/checked_div.
+            crate::math::mul_div_floor(
+                amount_after_penalty,
+                unstake_fee_bps as i128,
+                BOOST_BPS_BASE as i128,
+            )
+            .map_err(|_| VaultError::ArithmeticError)?
         } else {
             0
         };
