@@ -183,6 +183,11 @@ impl VaultError {
     pub const InvalidRewardAmount: VaultError = VaultError::InvalidHashLength;
     /// Backwards compatibility alias for `InvalidTokenInterface`.
     pub const InvalidToken: VaultError = VaultError::InvalidTokenInterface;
+    /// Returned by `claim` / `claim_partial` when the amount is below the
+    /// configured minimum claim and does not empty the pending reward.
+    /// `VaultError` is at the 50-variant cap, so this aliases
+    /// `BelowMinimumStake` (code 11) instead of adding a slot.
+    pub const ClaimBelowMinimum: VaultError = VaultError::BelowMinimumStake;
 }
 
 /// Typed validation failures for public APIs that historically panicked.
@@ -1334,6 +1339,67 @@ impl From<VaultError> for StrategyError {
             VaultError::ArithmeticError => StrategyError::ArithmeticError,
             VaultError::ZeroAmount => StrategyError::ZeroAmount,
             _ => StrategyError::Unauthorized,
+        }
+    }
+}
+
+/// Errors for the upgrader role and queued Wasm upgrades. `VaultError` is at
+/// Soroban's 50-variant cap, so these get their own enum.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum UpgradeError {
+    /// Caller is not the admin / upgrader / guardian the call requires.
+    Unauthorized = 1,
+    /// No admin is stored.
+    NotInitialized = 2,
+    /// Ledger arithmetic overflowed.
+    ArithmeticError = 3,
+    /// An upgrade is already pending; cancel it before queueing another.
+    UpgradeAlreadyQueued = 4,
+    /// No upgrade is pending.
+    NoUpgradeQueued = 5,
+    /// The upgrade delay has not elapsed yet.
+    UpgradeNotReady = 6,
+}
+
+impl From<VaultError> for UpgradeError {
+    fn from(err: VaultError) -> Self {
+        match err {
+            VaultError::NotInitialized => UpgradeError::NotInitialized,
+            VaultError::ArithmeticError => UpgradeError::ArithmeticError,
+            _ => UpgradeError::Unauthorized,
+        }
+    }
+}
+
+/// Errors for the `*_with_reason` admin setter variants. `VaultError` is at
+/// Soroban's 50-variant cap, so these get their own enum.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum ParamReasonError {
+    /// Caller is not the stored admin.
+    Unauthorized = 1,
+    /// No admin is stored.
+    NotInitialized = 2,
+    /// Arithmetic overflowed while applying the change.
+    ArithmeticError = 3,
+    /// The underlying setter rejected the new value (out of range, negative…).
+    InvalidValue = 4,
+    /// A sensitive setter (rates, fees, caps) was called with an empty reason.
+    EmptyReason = 5,
+    /// The reason is longer than `MAX_REASON_LEN` (128) bytes.
+    ReasonTooLong = 6,
+}
+
+impl From<VaultError> for ParamReasonError {
+    fn from(err: VaultError) -> Self {
+        match err {
+            VaultError::Unauthorized => ParamReasonError::Unauthorized,
+            VaultError::NotInitialized | VaultError::NoAdmin => ParamReasonError::NotInitialized,
+            VaultError::ArithmeticError => ParamReasonError::ArithmeticError,
+            _ => ParamReasonError::InvalidValue,
         }
     }
 }

@@ -117,8 +117,11 @@ impl VaultContract {
             cancelled: false,
             executed: false,
         };
+        let executes_at = proposal.executes_at;
         proposals.push_back(proposal);
         set_proposals(&env, &proposals);
+        // Open a rage-quit window until the announced change can execute.
+        crate::rage_quit::open_window(&env, executes_at);
 
         env.events().publish(
             (symbol_short!("acp_ann"), admin_addr),

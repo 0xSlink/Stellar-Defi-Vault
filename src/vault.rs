@@ -600,14 +600,20 @@ impl VaultContract {
     /// # Authorization
     /// `admin` must equal the stored admin **and** sign.
     ///
+    /// Disabled once an upgrader is configured (`set_upgrader`): upgrades must
+    /// then go through `queue_upgrade` / `execute_upgrade`, which enforce a delay.
+    ///
     /// # Errors
     /// - `NotInitialized`: no admin is stored.
-    /// - `Unauthorized`: `admin` is not the stored admin.
+    /// - `Unauthorized`: `admin` is not the stored admin, or an upgrader is configured.
     ///
     /// # Events
     /// - Topic `("upgrade",)` with data `(admin, new_wasm_hash, ledger_sequence)`.
     pub fn upgrade_wasm(env: Env, admin: Address, new_wasm_hash: soroban_sdk::BytesN<32>) -> Result<(), VaultError> {
         if admin != admin::get_admin(&env)? {
+            return Err(VaultError::Unauthorized);
+        }
+        if crate::upgrade_queue::get_upgrader(&env).is_some() {
             return Err(VaultError::Unauthorized);
         }
         admin.require_auth();
@@ -1190,6 +1196,7 @@ impl VaultContract {
         if amount > pending {
             return Err(VaultError::InsufficientRewardPool);
         }
+        crate::min_claim_amount::enforce_min_claim(&env, amount, pending)?;
 
         balance::set_accrued_reward(&env, &staker, pending.checked_sub(amount).ok_or(VaultError::ArithmeticError)?);
         let total_paid = balance::get_total_rewards_paid(&env);
@@ -6595,7 +6602,8 @@ impl VaultContract {
             .instance()
             .get(&DataKey::CooldownPeriod)
             .unwrap_or(0);
-        if cooldown > 0 {
+        // A rage-quit window waives the cooldown so users can exit in one step.
+        if cooldown > 0 && !crate::rage_quit::is_active(env) {
             return Err(VaultError::UseCooldownFlow);
         }
 
@@ -6695,6 +6703,9 @@ impl VaultContract {
         // fee from `set_unstake_fee_bps` entirely.
         let unstake_fee_bps = if withdraw_only_mode::is_active(env) {
             // Issue #705: exits are fee-free while the pool is withdraw-only.
+            0
+        } else if crate::rage_quit::is_active(env) {
+            // A rage-quit window is open: exits are fee-free (locks still apply).
             0
         } else if balance::get_dynamic_fee_config(env).is_some() {
             Self::compute_dynamic_fee_bps(env)
@@ -7775,6 +7786,9 @@ impl VaultContract {
             balance::set_last_updated_ledger(env, env.ledger().sequence()); // Issue #69
             return Ok(0);
         }
+
+        // A sub-minimum claim is only allowed when it empties the pending reward.
+        crate::min_claim_amount::enforce_min_claim(env, reward, accrued)?;
 
         let reward_pool = balance::get_reward_pool_balance(env);
         if reward_pool < reward {
@@ -13565,6 +13579,7 @@ impl VaultContract {
         // while the pool is withdraw-only.
         let unstake_fee_bps = if balance::get_sunset_exit_deadline(env).is_some()
             || withdraw_only_mode::is_active(env)
+            || crate::rage_quit::is_active(env)
         {
             0
         } else {

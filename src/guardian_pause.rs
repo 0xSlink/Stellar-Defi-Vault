@@ -37,7 +37,7 @@ use crate::vault::VaultContract;
 
 const GUARDIAN_KEY: Symbol = symbol_short!("guardian");
 
-fn get_guardian(env: &Env) -> Option<Address> {
+pub(crate) fn get_guardian(env: &Env) -> Option<Address> {
     env.storage().instance().get(&GUARDIAN_KEY)
 }
 

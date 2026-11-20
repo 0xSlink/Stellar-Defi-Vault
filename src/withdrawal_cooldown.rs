@@ -155,7 +155,9 @@ impl VaultContract {
 
         let cooldown = get_cooldown_ledgers(&env);
         let now = env.ledger().sequence();
+        // A rage-quit window waives the withdrawal cooldown.
         if cooldown > 0
+            && !crate::rage_quit::is_active(&env)
             && !crate::ledger_boundary::duration_elapsed(
                 now,
                 req.requested_at_ledger,

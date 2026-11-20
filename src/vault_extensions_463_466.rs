@@ -126,6 +126,9 @@ pub struct ParameterChange {
     pub parameter: String,
     pub old_value: i128,
     pub new_value: i128,
+    /// Admin-supplied justification (max 128 bytes). Empty for changes made
+    /// through setters that do not take a reason.
+    pub reason: String,
 }
 
 const MAX_PARAM_LOG_ENTRIES: u32 = 100;
@@ -141,13 +144,32 @@ pub fn set_parameter_change_log(env: &Env, log: &Vec<ParameterChange>) {
     env.storage().instance().set(&symbol_short!("prm_log"), log);
 }
 
-/// Append a parameter change to the immutable log
+/// Append a parameter change to the immutable log (no reason recorded).
 pub fn log_parameter_change(
     env: &Env,
     changed_by: &Address,
     parameter: &str,
     old_value: i128,
     new_value: i128,
+) {
+    log_parameter_change_with_reason(
+        env,
+        changed_by,
+        parameter,
+        old_value,
+        new_value,
+        &String::from_str(env, ""),
+    );
+}
+
+/// Append a parameter change, with the admin's justification, to the log.
+pub fn log_parameter_change_with_reason(
+    env: &Env,
+    changed_by: &Address,
+    parameter: &str,
+    old_value: i128,
+    new_value: i128,
+    reason: &String,
 ) {
     let mut log = get_parameter_change_log(env);
 
@@ -157,6 +179,7 @@ pub fn log_parameter_change(
         parameter: String::from_str(env, parameter),
         old_value,
         new_value,
+        reason: reason.clone(),
     };
 
     log.push_back(entry);
