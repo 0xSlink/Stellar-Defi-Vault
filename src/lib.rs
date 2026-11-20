@@ -177,3 +177,9 @@ mod test_issues_769_differential;
 // ── Issue #843: ProposalState enum and get_proposal_state ──────
 #[cfg(test)]
 mod test_issue_843;
+
+pub mod vault_extensions_890;
+pub mod time_travel;
+
+#[cfg(test)]
+mod test_issues_890_892;
