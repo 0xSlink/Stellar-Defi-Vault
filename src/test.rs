@@ -257,6 +257,104 @@ proptest! {
     }
 }
 
+// ── issue #785: share price never decreases from deposits/withdrawals ────────
+//
+// Share price is `total_deposited / total_shares` (the same ratio
+// `take_share_price_snapshot` records and `preview_redeem` applies).
+// Compared below via cross-multiplication
+// (`deposited_after * shares_before >= deposited_before * shares_after`)
+// rather than floating-point division, so the assertion is exact.
+//
+// Tolerance: none needed. Every share mint (`amount_to_shares`) and burn
+// (`shares_to_amount`) in this contract floors (issue #457: round in the
+// existing stakers' favor), so an ordinary deposit or withdrawal can only
+// leave the ratio unchanged or nudge it up — never down. A withdrawal fee
+// doesn't change this: the fee is carved out of what the *withdrawing* user
+// receives, not out of what remains deposited per remaining share.
+//
+// Any seed that falsifies this will be written by `proptest` itself to
+// `proptest-regressions/test.txt` (its default failure-persistence
+// location, next to this file) the next time the suite runs — commit that
+// file as-is if it ever appears, as the permanent regression case.
+fn assert_share_price_never_decreases(
+    f: &VaultFixture,
+    operations: std::vec::Vec<(u8, u8, u32)>,
+) -> Result<(), proptest::test_runner::TestCaseError> {
+    let (mut prev_shares, mut prev_deposited) = f.vault.vault_state();
+
+    for (user_index, operation, raw_amount) in operations {
+        let user = if user_index % 2 == 0 {
+            f.alice.clone()
+        } else {
+            f.bob.clone()
+        };
+        let amount = i128::from(raw_amount);
+
+        match operation {
+            0 => {
+                f.vault.deposit(&user, &amount, &None);
+            }
+            _ => {
+                let user_shares = f.vault.shares_of(&user);
+                if user_shares > 0 {
+                    let shares = (amount % user_shares) + 1;
+                    f.vault.withdraw(&user, &shares);
+                }
+            }
+        }
+
+        let (shares, deposited) = f.vault.vault_state();
+        if prev_shares > 0 && shares > 0 {
+            let lhs = deposited
+                .checked_mul(prev_shares)
+                .expect("bounded test amounts never overflow i128");
+            let rhs = prev_deposited
+                .checked_mul(shares)
+                .expect("bounded test amounts never overflow i128");
+            prop_assert!(
+                lhs >= rhs,
+                "share price decreased: before={}/{}, after={}/{}",
+                prev_deposited,
+                prev_shares,
+                deposited,
+                shares
+            );
+        }
+        prev_shares = shares;
+        prev_deposited = deposited;
+    }
+    Ok(())
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 32,
+        ..ProptestConfig::default()
+    })]
+
+    /// Fees disabled: deposits and withdrawals alone, zero unstake fee.
+    #[test]
+    fn share_price_never_decreases_fees_disabled(
+        operations in prop::collection::vec((0_u8..2, 0_u8..2, 1_u32..100_001), 1..60)
+    ) {
+        let f = VaultFixture::new();
+        f.vault.set_unstake_fee_bps(&f.admin, &0);
+        assert_share_price_never_decreases(&f, operations)?;
+    }
+
+    /// Fees enabled (2.5% unstake fee): the fee comes out of the
+    /// withdrawer's payout, not out of what's left for remaining stakers,
+    /// so the same non-decreasing property must still hold.
+    #[test]
+    fn share_price_never_decreases_fees_enabled(
+        operations in prop::collection::vec((0_u8..2, 0_u8..2, 1_u32..100_001), 1..60)
+    ) {
+        let f = VaultFixture::new();
+        f.vault.set_unstake_fee_bps(&f.admin, &250);
+        assert_share_price_never_decreases(&f, operations)?;
+    }
+}
+
 // ── initialization ────────────────────────────────────────────────────────────
 // â”€â”€ initialization â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
