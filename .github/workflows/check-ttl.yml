@@ -1,0 +1,22 @@
+name: Storage TTL Monitor
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+jobs:
+  check-ttl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install @stellar/stellar-sdk typescript ts-node
+      - name: Run TTL check
+        env:
+          SOROBAN_RPC_URL: "https://soroban-testnet.stellar.org"
+          CONTRACT_ID: ${{ secrets.CONTRACT_ID }}
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+        run: npx ts-node scripts/check-ttl.ts
