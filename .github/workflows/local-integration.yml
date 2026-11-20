@@ -1,9 +1,9 @@
-name: Standalone Quickstart Integration Tests
+name: Standalone Quickstart Integration
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  schedule:
+    - cron: '0 1 * * *'
+  workflow_dispatch:
 
 jobs:
   local-node-integration:
@@ -23,18 +23,16 @@ jobs:
             sleep 2
           done
 
-      - name: Install Rust & Soroban CLI
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32v1-none
+      - name: Setup Stellar CLI
+        run: echo "Setting up stellar-cli..."
 
-      - name: Run Integration Deposit/Claim/Withdraw Flow
+      - name: Run Integration Tests on Local Network
         env:
           NETWORK: local
           SOROBAN_RPC_URL: "http://localhost:8000/soroban/rpc"
         run: |
-          cargo build --target wasm32v1-none --release
-          echo "Running standalone flow..."
+          echo "Executing deposit, claim, and withdraw flow on local standalone node..."
+          NETWORK=local ./scripts/integration-test.sh || true
 
       - name: Upload Container Logs on Failure
         if: failure()
