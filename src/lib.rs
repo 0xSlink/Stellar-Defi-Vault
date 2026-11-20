@@ -168,3 +168,6 @@ mod test_resource_costs;
 
 #[cfg(test)]
 mod test_runbook_interface_snapshot;
+
+#[cfg(test)]
+mod test_feature_gating_matrix;
