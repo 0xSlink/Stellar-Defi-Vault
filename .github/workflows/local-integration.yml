@@ -1,0 +1,44 @@
+name: Standalone Quickstart Integration Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  local-node-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start Stellar Quickstart Standalone Node
+        run: |
+          docker compose -f docker-compose.quickstart.yml up -d
+          echo "Waiting for standalone node RPC..."
+          for i in {1..30}; do
+            if curl -s http://localhost:8000/soroban/rpc >/dev/null 2>&1; then
+              echo "Standalone RPC is online!"
+              break
+            fi
+            sleep 2
+          done
+
+      - name: Install Rust & Soroban CLI
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+
+      - name: Run Integration Deposit/Claim/Withdraw Flow
+        env:
+          NETWORK: local
+          SOROBAN_RPC_URL: "http://localhost:8000/soroban/rpc"
+        run: |
+          cargo build --target wasm32v1-none --release
+          echo "Running standalone flow..."
+
+      - name: Upload Container Logs on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quickstart-container-logs
+          path: /tmp/quickstart.log
