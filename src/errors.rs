@@ -198,6 +198,13 @@ impl VaultError {
     /// `VaultError` is at the 50-variant cap, so this aliases `NotWhitelisted`
     /// (code 19), the existing "caller is not allowed in" case.
     pub const AddressBlocked: VaultError = VaultError::NotWhitelisted;
+    /// Returned when a payout would go to an address that is not on the user's
+    /// withdrawal allowlist (see `withdrawal_allowlist`). Aliases
+    /// `NotWhitelisted` (code 19) because `VaultError` is at the 50-variant cap.
+    pub const DestinationNotAllowed: VaultError = VaultError::NotWhitelisted;
+    /// Returned by `set_withdrawal_allowlist()` when more than 5 addresses are
+    /// supplied. Aliases `BatchTooLarge` (code 22) for the same reason.
+    pub const AllowlistTooLong: VaultError = VaultError::BatchTooLarge;
 }
 
 impl VaultExtError {

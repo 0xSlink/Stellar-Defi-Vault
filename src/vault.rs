@@ -1015,6 +1015,8 @@ impl VaultContract {
     /// - `Unauthorized`: re-entrant call.
     /// - `AddressBlocked`: the recipient is blocked, or `user` is blocked and
     ///   `recipient` is not `user`.
+    /// - `DestinationNotAllowed`: `user` has a withdrawal allowlist in force and
+    ///   `recipient`, or `user` (who receives the rewards), is not on it.
     /// - `WithdrawalLimitExceeded`: exceeds the rolling 24h per-user cap.
     /// - Every claim-path and unstake-path error (`UseCooldownFlow`,
     ///   `InsufficientRewardPool`, `ArithmeticError`, ...).
@@ -1043,6 +1045,7 @@ impl VaultContract {
         let reward = if crate::address_blocklist::is_blocked(&env, &user) {
             0
         } else {
+            crate::withdrawal_allowlist::require_destination_allowed(&env, &user, &user)?;
             Self::do_claim(&env, &user)?
         };
 
@@ -1204,6 +1207,8 @@ impl VaultContract {
         staker.require_auth();
         // Blocked addresses cannot be paid; their rewards stay accrued.
         crate::address_blocklist::require_not_blocked(&env, &staker)?;
+        // Rewards are paid to `staker`, so that address must be on their allowlist.
+        crate::withdrawal_allowlist::require_destination_allowed(&env, &staker, &staker)?;
         // Issue #707: an owner claim counts as an interaction.
         beneficiary_inheritance::touch(&env, &staker);
         // Issue #201: rate limit applies to explicit claim() calls only ΓÇö
@@ -1260,6 +1265,7 @@ impl VaultContract {
         let _guard = ReentrancyGuard::new(&env)?;
         staker.require_auth();
         crate::address_blocklist::require_not_blocked(&env, &staker)?;
+        crate::withdrawal_allowlist::require_destination_allowed(&env, &staker, &staker)?;
         // Issue #707: an owner claim counts as an interaction.
         beneficiary_inheritance::touch(&env, &staker);
         Self::check_claim_rate_limit(&env, &staker);
@@ -6667,6 +6673,7 @@ impl VaultContract {
     ) -> Result<i128, VaultError> {
         // Principal stays recoverable, but only to the owner's own address.
         crate::address_blocklist::require_withdrawal_allowed(env, staker, recipient)?;
+        crate::withdrawal_allowlist::require_destination_allowed(env, staker, recipient)?;
         Self::maybe_emit_position_expired(env, staker);
 
         // Reject unstake if user has an outstanding debt NFT.
@@ -14771,6 +14778,7 @@ pub fn get_reward_threshold(env: Env) -> i128 {
         }
         user.require_auth();
         crate::address_blocklist::require_withdrawal_allowed(&env, &user, &recipient)?;
+        crate::withdrawal_allowlist::require_destination_allowed(&env, &user, &recipient)?;
 
         let user_shares = balance::get_shares(&env, &user);
         if user_shares < shares {

@@ -51,6 +51,7 @@ pub mod daily_community_tip; // issue #458 â€” daily stake-weighted feature
 pub mod governance_params; // issue #712 â€” governance quorum and pass threshold
 pub mod lockdrop_campaign; // issue #460 â€” lockdrop campaign
 pub mod address_blocklist; // admin blocklist for compromised or sanctioned accounts
+pub mod withdrawal_allowlist; // user-defined withdrawal destination allowlist
 pub mod feature_flags; // feature-flag registry for optional modules
 pub mod rage_quit; // fee-free exit window during notice periods
 pub mod param_reasons; // reason strings on admin parameter changes
@@ -200,3 +201,6 @@ mod test_address_blocklist;
 
 #[cfg(test)]
 mod test_exit;
+
+#[cfg(test)]
+mod test_withdrawal_allowlist;
