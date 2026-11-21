@@ -1435,3 +1435,26 @@ impl From<VaultError> for PoolMetadataError {
         }
     }
 }
+
+/// Errors for `project_reward`. `VaultError` is at Soroban's 50-variant cap,
+/// so these get their own enum.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum ProjectionError {
+    /// No admin is stored (the pool is not initialized).
+    NotInitialized = 1,
+    /// An intermediate value overflowed.
+    ArithmeticError = 2,
+    /// `at_ledger` is earlier than the current ledger.
+    LedgerInPast = 3,
+}
+
+impl From<VaultError> for ProjectionError {
+    fn from(err: VaultError) -> Self {
+        match err {
+            VaultError::NotInitialized | VaultError::NoAdmin => ProjectionError::NotInitialized,
+            _ => ProjectionError::ArithmeticError,
+        }
+    }
+}

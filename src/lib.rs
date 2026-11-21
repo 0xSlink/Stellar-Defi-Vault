@@ -197,3 +197,6 @@ mod test_pool_metadata;
 
 #[cfg(test)]
 mod test_versioned_storage;
+
+#[cfg(test)]
+mod test_reward_projection;
