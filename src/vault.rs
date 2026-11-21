@@ -535,6 +535,12 @@ impl VaultContract {
         if referrer.as_ref().is_some_and(|address| address == &user) {
             return Err(VaultError::InvalidAddress);
         }
+        // A plain deposit (no referrer) is never affected by the flag.
+        if referrer.is_some()
+            && !crate::feature_flags::is_enabled(&env, crate::feature_flags::Feature::Referrals)
+        {
+            return Err(VaultError::FeatureDisabled);
+        }
         let is_first_deposit = !balance::get_all_stakers(&env)
             .iter()
             .any(|staker| &staker == &user);
@@ -556,6 +562,9 @@ impl VaultContract {
     /// Enable an existing or former staker to refer new depositors.
     pub fn register_referrer(env: Env, user: Address) -> Result<(), VaultError> {
         user.require_auth();
+        if !crate::feature_flags::is_enabled(&env, crate::feature_flags::Feature::Referrals) {
+            return Err(VaultError::FeatureDisabled);
+        }
         let has_position_history = balance::get_shares(&env, &user) > 0
             || balance::get_all_stakers(&env)
                 .iter()
@@ -9211,6 +9220,9 @@ impl VaultContract {
     ) -> Result<i128, VaultError> {
         if staker == referrer {
             return Err(VaultError::InvalidAddress);
+        }
+        if !crate::feature_flags::is_enabled(&env, crate::feature_flags::Feature::Referrals) {
+            return Err(VaultError::FeatureDisabled);
         }
 
         let shares = Self::do_stake(&env, &staker, amount)?;

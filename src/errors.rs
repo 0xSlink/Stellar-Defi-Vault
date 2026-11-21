@@ -188,6 +188,20 @@ impl VaultError {
     /// `VaultError` is at the 50-variant cap, so this aliases
     /// `BelowMinimumStake` (code 11) instead of adding a slot.
     pub const ClaimBelowMinimum: VaultError = VaultError::BelowMinimumStake;
+    /// Returned by optional-module entrypoints that return `VaultError` while
+    /// their feature flag is off (see `feature_flags`). `VaultError` is at the
+    /// 50-variant cap, so this aliases `VaultPaused` (code 6): the module is
+    /// switched off, just as a paused vault is.
+    pub const FeatureDisabled: VaultError = VaultError::VaultPaused;
+}
+
+impl VaultExtError {
+    /// Returned by optional-module entrypoints that return `VaultExtError`
+    /// while their feature flag is off (see `feature_flags`). `VaultExtError`
+    /// is at the 50-variant cap, so this aliases `BuybackNotEnabled` (code 29),
+    /// the existing "this optional feature is not enabled" case.
+    #[allow(non_upper_case_globals)]
+    pub const FeatureDisabled: VaultExtError = VaultExtError::BuybackNotEnabled;
 }
 
 /// Typed validation failures for public APIs that historically panicked.
@@ -772,6 +786,9 @@ pub enum VaultCampaignError {
     /// Returned by `set_region_tag()` when a new tag would exceed
     /// `MAX_REGION_TAGGED_STAKERS`.
     TooManyRegionTags = 35,
+    /// Returned by lockdrop entrypoints while the `Lockdrop` feature flag is
+    /// off (see `feature_flags`).
+    FeatureDisabled = 37,
 }
 
 impl From<VaultError> for VaultCampaignError {
@@ -1400,6 +1417,29 @@ impl From<VaultError> for ParamReasonError {
             VaultError::NotInitialized | VaultError::NoAdmin => ParamReasonError::NotInitialized,
             VaultError::ArithmeticError => ParamReasonError::ArithmeticError,
             _ => ParamReasonError::InvalidValue,
+        }
+    }
+}
+
+/// Errors for the feature-flag registry. `VaultError` is at Soroban's 50-variant
+/// cap, so this gets its own enum.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum FeatureFlagError {
+    /// Caller is not the stored admin.
+    Unauthorized = 1,
+    /// No admin is stored.
+    NotInitialized = 2,
+    /// The optional module behind this entrypoint is switched off.
+    FeatureDisabled = 3,
+}
+
+impl From<VaultError> for FeatureFlagError {
+    fn from(err: VaultError) -> Self {
+        match err {
+            VaultError::NotInitialized | VaultError::NoAdmin => FeatureFlagError::NotInitialized,
+            _ => FeatureFlagError::Unauthorized,
         }
     }
 }
