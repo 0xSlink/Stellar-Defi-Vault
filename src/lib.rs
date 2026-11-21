@@ -51,6 +51,7 @@ pub mod daily_community_tip; // issue #458 â€” daily stake-weighted feature
 pub mod governance_params; // issue #712 â€” governance quorum and pass threshold
 pub mod lockdrop_campaign; // issue #460 â€” lockdrop campaign
 pub mod governance_source; // governance token distinct from the stake token
+pub mod zap_compound; // claim, swap to the stake token and compound in one call
 pub mod rage_quit; // fee-free exit window during notice periods
 pub mod param_reasons; // reason strings on admin parameter changes
 pub mod upgrade_queue; // upgrader role + delayed, cancellable Wasm upgrades
