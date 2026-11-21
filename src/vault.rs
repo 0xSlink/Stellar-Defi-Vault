@@ -6635,6 +6635,10 @@ impl VaultContract {
             }
         }
 
+        // Opt-in auto-claim: pay pending rewards with the withdrawal, subject
+        // to the normal claim cooldown, minimum and vesting rules.
+        auto_claim_on_withdraw::maybe_claim_on_withdraw(env, staker)?;
+
         let total_shares = balance::get_total_shares(env);
         let total_deposited = balance::get_total_deposited(env);
 
@@ -15212,6 +15216,8 @@ pub mod sub_pool_rebalancing;
 pub mod quadratic_vote;
 #[path = "benchmark_rate.rs"]
 pub mod benchmark_rate;
+#[path = "auto_claim_on_withdraw.rs"]
+pub mod auto_claim_on_withdraw;
 #[path = "guardian_pause.rs"]
 pub mod guardian_pause;
 #[path = "guardian_veto.rs"]
