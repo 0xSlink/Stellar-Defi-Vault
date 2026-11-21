@@ -193,6 +193,11 @@ impl VaultError {
     /// 50-variant cap, so this aliases `VaultPaused` (code 6): the module is
     /// switched off, just as a paused vault is.
     pub const FeatureDisabled: VaultError = VaultError::VaultPaused;
+    /// Returned when a blocked address (see `address_blocklist`) tries to
+    /// deposit, claim, transfer, or withdraw to anywhere but its own address.
+    /// `VaultError` is at the 50-variant cap, so this aliases `NotWhitelisted`
+    /// (code 19), the existing "caller is not allowed in" case.
+    pub const AddressBlocked: VaultError = VaultError::NotWhitelisted;
 }
 
 impl VaultExtError {

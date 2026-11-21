@@ -435,6 +435,7 @@ impl VaultContract {
     /// low-balance-alert and stake-hook helpers it calls may emit their own.
     pub fn stake(env: Env, user: Address, amount: i128) -> Result<i128, VaultError> {
         user.require_auth();
+        crate::address_blocklist::require_not_blocked(&env, &user)?;
         // Issue #525: no new deposits once the pool is sunsetting. Checked
         // before any state is written so a rejected deposit leaves nothing.
         Self::require_no_sunset(&env)?;
@@ -1136,6 +1137,8 @@ impl VaultContract {
     pub fn claim(env: Env, staker: Address) -> Result<i128, VaultError> {
         let _guard = ReentrancyGuard::new(&env)?;
         staker.require_auth();
+        // Blocked addresses cannot be paid; their rewards stay accrued.
+        crate::address_blocklist::require_not_blocked(&env, &staker)?;
         // Issue #707: an owner claim counts as an interaction.
         beneficiary_inheritance::touch(&env, &staker);
         // Issue #201: rate limit applies to explicit claim() calls only ΓÇö
@@ -1191,6 +1194,7 @@ impl VaultContract {
     pub fn claim_partial(env: Env, staker: Address, amount: i128) -> Result<i128, VaultError> {
         let _guard = ReentrancyGuard::new(&env)?;
         staker.require_auth();
+        crate::address_blocklist::require_not_blocked(&env, &staker)?;
         // Issue #707: an owner claim counts as an interaction.
         beneficiary_inheritance::touch(&env, &staker);
         Self::check_claim_rate_limit(&env, &staker);
@@ -3428,6 +3432,7 @@ impl VaultContract {
 
         let (p_dep, _) = crate::vault_extensions_490_493::VaultContract::get_pause_state(env.clone());
         if p_dep { return Err(VaultError::VaultPaused); }
+        crate::address_blocklist::require_not_blocked(env, user)?;
         Self::require_no_sunset(env)?;
 
         if amount <= 0 {
@@ -5202,6 +5207,8 @@ impl VaultContract {
         amount: i128,
     ) -> Result<i128, VaultError> {
         delegate.require_auth();
+        crate::address_blocklist::require_not_blocked(&env, &delegate)?;
+        crate::address_blocklist::require_not_blocked(&env, &beneficiary)?;
         Self::require_not_paused(&env)?;
         // Issue #705: no inflows while the pool is withdraw-only.
         Self::require_no_sunset(&env)?;
@@ -5893,6 +5900,8 @@ impl VaultContract {
         from.require_auth();
         Self::require_not_paused(&env)?;
 
+        crate::address_blocklist::require_not_blocked(&env, &from)?;
+        crate::address_blocklist::require_not_blocked(&env, &to)?;
         let from_shares = balance::get_shares(&env, &from);
         if from_shares == 0 {
             return Err(VaultError::PositionNotFound);
@@ -5972,6 +5981,8 @@ impl VaultContract {
         from: &Address,
         to: &Address,
     ) -> Result<(), VaultError> {
+        crate::address_blocklist::require_not_blocked(env, from)?;
+        crate::address_blocklist::require_not_blocked(env, to)?;
         let env = env.clone();
         Self::require_not_paused(&env)?;
 
@@ -6360,6 +6371,7 @@ impl VaultContract {
 
     fn do_stake(env: &Env, staker: &Address, amount: i128) -> Result<i128, VaultError> {
         staker.require_auth();
+        crate::address_blocklist::require_not_blocked(env, staker)?;
         Self::require_not_stopped(env)?;
         Self::require_not_shutting_down(env)?;
         Self::require_not_sunsetting(env)?;
@@ -6588,6 +6600,8 @@ impl VaultContract {
         shares: i128,
         recipient: &Address,
     ) -> Result<i128, VaultError> {
+        // Principal stays recoverable, but only to the owner's own address.
+        crate::address_blocklist::require_withdrawal_allowed(env, staker, recipient)?;
         Self::maybe_emit_position_expired(env, staker);
 
         // Reject unstake if user has an outstanding debt NFT.
@@ -7973,6 +7987,7 @@ impl VaultContract {
     /// minting, event emission) without calling `require_auth`. Callers must
     /// have already authenticated the staker.
     fn do_stake_inner(env: &Env, staker: &Address, amount: i128) -> Result<i128, VaultError> {
+        crate::address_blocklist::require_not_blocked(env, staker)?;
         Self::require_not_stopped(env)?;
         Self::require_not_shutting_down(env)?;
         Self::require_not_sunsetting(env)?;
@@ -14690,6 +14705,7 @@ pub fn get_reward_threshold(env: Env) -> i128 {
             return Err(VaultError::ZeroAmount);
         }
         user.require_auth();
+        crate::address_blocklist::require_withdrawal_allowed(&env, &user, &recipient)?;
 
         let user_shares = balance::get_shares(&env, &user);
         if user_shares < shares {
