@@ -1458,3 +1458,31 @@ impl From<VaultError> for ProjectionError {
         }
     }
 }
+
+/// Errors for the reward campaign window. `VaultError` is at Soroban's
+/// 50-variant cap, so these get their own enum.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum RewardWindowError {
+    /// Caller is not the stored admin.
+    Unauthorized = 1,
+    /// No admin is stored.
+    NotInitialized = 2,
+    /// Settling accrual before the change overflowed.
+    ArithmeticError = 3,
+    /// `end_ledger` is not after `start_ledger`.
+    InvalidWindow = 4,
+    /// There is no window to clear.
+    NoWindow = 5,
+}
+
+impl From<VaultError> for RewardWindowError {
+    fn from(err: VaultError) -> Self {
+        match err {
+            VaultError::NotInitialized | VaultError::NoAdmin => RewardWindowError::NotInitialized,
+            VaultError::Unauthorized => RewardWindowError::Unauthorized,
+            _ => RewardWindowError::ArithmeticError,
+        }
+    }
+}

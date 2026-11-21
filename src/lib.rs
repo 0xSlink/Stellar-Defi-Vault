@@ -200,3 +200,6 @@ mod test_versioned_storage;
 
 #[cfg(test)]
 mod test_reward_projection;
+
+#[cfg(test)]
+mod test_reward_window;

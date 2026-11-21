@@ -7084,6 +7084,15 @@ impl VaultContract {
             return Ok(0);
         }
 
+        // Reward window: only the part of the range inside the configured
+        // campaign window accrues (nothing, if there is no overlap). With no
+        // window configured the range is left unchanged.
+        let (start_ledger, end_ledger) =
+            match crate::vault::reward_window::overlap(env, start_ledger, end_ledger) {
+                Some(range) => range,
+                None => return Ok(0),
+            };
+
         // Issue #202: time-weighted average rate across [start_ledger,
         // end_ledger), correctly handling a bootstrap window that only
         // partially overlaps this range (falls back to the plain
@@ -15243,3 +15252,5 @@ pub mod proposal_requirements;
 pub mod proposal_state;
 #[path = "reward_projection.rs"]
 pub mod reward_projection;
+#[path = "reward_window.rs"]
+pub mod reward_window;
