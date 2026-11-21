@@ -535,3 +535,18 @@ You can run the integration test suite against the Stellar Testnet by executing:
 ```
 
 Note: Ensure you have the Stellar CLI configured with testnet credentials before running this script.
+
+---
+
+## Native XLM Integration & Trustline Notes (#865)
+
+The vault supports Stellar native XLM through the canonical Stellar Asset Contract (SAC).
+- **Precision**: Native XLM uses 7 decimal digits (1 XLM = $10,000,000$ stroops).
+- **Trustlines & Minimum Reserves**: Unlike non-native classic Stellar assets, native XLM does not require a trustline. However, Stellar accounts must maintain the minimum base reserve (0.5 XLM per ledger entry) to remain valid.
+- **SAC Address**: On Testnet, the native SAC contract address is `CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC`.
+
+## Replay Protection for Signed Actions (#867)
+
+To protect meta-transactions and relayer-submitted operations against replay attacks, the vault maintains monotonic per-user nonces (`usr_non`):
+- `get_user_nonce(user)` returns the current expected sequence number (starts at 0).
+- `consume_nonce(user, nonce)` verifies `nonce == current_nonce`, increments the sequence, and refreshes persistent storage TTL. Any reused or out-of-order nonce immediately reverts with `InvalidNonce`.

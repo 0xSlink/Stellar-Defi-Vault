@@ -189,3 +189,7 @@ mod test_issue_897;
 
 #[cfg(test)]
 mod test_rage_quit;
+
+pub mod vault_extensions_863_864_865_867;
+#[cfg(test)]
+mod test_issues_863_864_865_867;
