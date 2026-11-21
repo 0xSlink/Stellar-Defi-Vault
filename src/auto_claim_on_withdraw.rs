@@ -19,7 +19,8 @@
 //!   claim that empties the pending balance is always allowed),
 //! - **vesting**: the vesting queue is full (when vesting is enabled the
 //!   reward is queued into vesting, exactly as `claim` does),
-//! - epoch mode, halted emissions, or an under-funded reward pool.
+//! - claims paused through the pause mask, epoch mode, halted emissions, or an
+//!   under-funded reward pool.
 //!
 //! # Storage
 //!
@@ -62,6 +63,12 @@ pub(crate) fn maybe_claim_on_withdraw(env: &Env, staker: &Address) -> Result<i12
     }
     let accrued = balance::get_accrued_reward(env, staker);
     if accrued <= 0 {
+        return Ok(0);
+    }
+
+    // Claims paused via the pause mask: withdrawals stay open, rewards stay pending.
+    if crate::pause_mask::is_paused(env, crate::pause_mask::PAUSE_CLAIM) {
+        skip(env, staker, symbol_short!("paused"));
         return Ok(0);
     }
 

@@ -170,6 +170,7 @@ impl VaultContract {
             return Ok(Self::claim(env, staker)?);
         }
         staker.require_auth();
+        crate::pause_mask::require_not_paused(&env, crate::pause_mask::PAUSE_CLAIM)?;
 
         let accrued = balance::get_accrued_reward(&env, &staker);
         if accrued <= 0 || crate::peg_stabilization::emissions_halted(&env) {

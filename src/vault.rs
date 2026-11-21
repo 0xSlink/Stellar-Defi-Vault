@@ -435,6 +435,7 @@ impl VaultContract {
     /// low-balance-alert and stake-hook helpers it calls may emit their own.
     pub fn stake(env: Env, user: Address, amount: i128) -> Result<i128, VaultError> {
         user.require_auth();
+        Self::require_not_paused(&env, crate::pause_mask::PAUSE_DEPOSIT)?;
         // Issue #525: no new deposits once the pool is sunsetting. Checked
         // before any state is written so a rejected deposit leaves nothing.
         Self::require_no_sunset(&env)?;
@@ -1127,6 +1128,7 @@ impl VaultContract {
     pub fn claim(env: Env, staker: Address) -> Result<i128, VaultError> {
         let _guard = ReentrancyGuard::new(&env)?;
         staker.require_auth();
+        Self::require_not_paused(&env, crate::pause_mask::PAUSE_CLAIM)?;
         // Issue #707: an owner claim counts as an interaction.
         beneficiary_inheritance::touch(&env, &staker);
         // Issue #201: rate limit applies to explicit claim() calls only ΓÇö
@@ -1182,6 +1184,7 @@ impl VaultContract {
     pub fn claim_partial(env: Env, staker: Address, amount: i128) -> Result<i128, VaultError> {
         let _guard = ReentrancyGuard::new(&env)?;
         staker.require_auth();
+        Self::require_not_paused(&env, crate::pause_mask::PAUSE_CLAIM)?;
         // Issue #707: an owner claim counts as an interaction.
         beneficiary_inheritance::touch(&env, &staker);
         Self::check_claim_rate_limit(&env, &staker);
@@ -2517,7 +2520,7 @@ impl VaultContract {
         admin::require_admin_as(&env, &admin_addr)?;
         admin_addr.require_auth();
         admin::require_admin(&env)?;
-        Self::require_not_paused(&env)?;
+        Self::require_not_paused(&env, crate::pause_mask::PAUSE_FUNDING)?;
         if amount <= 0 {
             return Err(VaultError::ZeroAmount);
         }
@@ -2660,7 +2663,7 @@ impl VaultContract {
     ) -> Result<(), VaultQuizError> {
         admin_addr.require_auth();
         admin::require_admin(&env)?;
-        Self::require_not_paused(&env)?;
+        Self::require_not_paused(&env, crate::pause_mask::PAUSE_QUIZ)?;
 
         if question_hash.len() != QUIZ_HASH_LEN || answer_hash.len() != QUIZ_HASH_LEN {
             return Err(VaultQuizError::InvalidHashLength);
@@ -2707,7 +2710,7 @@ impl VaultContract {
         answer_hash: soroban_sdk::Bytes,
     ) -> Result<(), VaultQuizError> {
         user.require_auth();
-        Self::require_not_paused(&env)?;
+        Self::require_not_paused(&env, crate::pause_mask::PAUSE_QUIZ)?;
 
         if answer_hash.len() != QUIZ_HASH_LEN {
             return Err(VaultQuizError::InvalidHashLength);
@@ -3357,17 +3360,10 @@ impl VaultContract {
         }
     }
 
-    fn require_not_paused(env: &Env) -> Result<(), VaultError> {
-        balance::apply_scheduled_unpause_if_due(env);
-        if env
-            .storage()
-            .instance()
-            .get(&DataKey::Paused)
-            .unwrap_or(false)
-        {
-            return Err(VaultError::VaultPaused);
-        }
-        Ok(())
+    /// Revert with `VaultPaused` if any function-group bit in `bits` is paused
+    /// (see `pause_mask`). A full `pause()` sets every bit.
+    fn require_not_paused(env: &Env, bits: u32) -> Result<(), VaultError> {
+        crate::pause_mask::require_not_paused(env, bits)
     }
 
     /// Issue #525: reject new deposits once a graceful sunset has been started.
@@ -3420,8 +3416,7 @@ impl VaultContract {
         // Issue #525: the `stake_and_claim` path must not slip past the sunset
         // gate that `stake` applies.
 
-        let (p_dep, _) = crate::vault_extensions_490_493::VaultContract::get_pause_state(env.clone());
-        if p_dep { return Err(VaultError::VaultPaused); }
+        Self::require_not_paused(env, crate::pause_mask::PAUSE_DEPOSIT)?;
         Self::require_no_sunset(env)?;
 
         if amount <= 0 {
@@ -3478,10 +3473,7 @@ impl VaultContract {
         if shares <= 0 {
             return Err(VaultError::ZeroAmount);
         }
-        let (_, withdrawals_paused) = crate::vault_extensions_490_493::VaultContract::get_pause_state(env.clone());
-        if withdrawals_paused {
-            return Err(VaultError::VaultPaused);
-        }
+        Self::require_not_paused(env, crate::pause_mask::PAUSE_WITHDRAW)?;
         if Self::get_lock_status(env.clone(), staker.clone()).is_some() {
             return Err(VaultError::UseCooldownFlow);
         }
@@ -5196,7 +5188,7 @@ impl VaultContract {
         amount: i128,
     ) -> Result<i128, VaultError> {
         delegate.require_auth();
-        Self::require_not_paused(&env)?;
+        Self::require_not_paused(&env, crate::pause_mask::PAUSE_DEPOSIT)?;
         // Issue #705: no inflows while the pool is withdraw-only.
         Self::require_no_sunset(&env)?;
 
@@ -5885,7 +5877,7 @@ impl VaultContract {
     /// but starts fresh on reward accrual. Recipient must have no active staking position.
     pub fn transfer_position(env: Env, from: Address, to: Address) -> Result<(), VaultError> {
         from.require_auth();
-        Self::require_not_paused(&env)?;
+        Self::require_not_paused(&env, crate::pause_mask::PAUSE_TRANSFER)?;
 
         let from_shares = balance::get_shares(&env, &from);
         if from_shares == 0 {
@@ -5967,7 +5959,7 @@ impl VaultContract {
         to: &Address,
     ) -> Result<(), VaultError> {
         let env = env.clone();
-        Self::require_not_paused(&env)?;
+        Self::require_not_paused(&env, crate::pause_mask::PAUSE_TRANSFER)?;
 
         let from_shares = balance::get_shares(&env, from);
         if from_shares == 0 {
@@ -6357,7 +6349,7 @@ impl VaultContract {
         Self::require_not_stopped(env)?;
         Self::require_not_shutting_down(env)?;
         Self::require_not_sunsetting(env)?;
-        Self::require_not_paused(env)?;
+        Self::require_not_paused(env, crate::pause_mask::PAUSE_DEPOSIT)?;
         Self::check_stake_rate_limit(env, staker);
         // Issue #237: while auction mode is on, only auction winners may stake.
         Self::require_pool_spot(env, staker)?;
@@ -6594,7 +6586,7 @@ impl VaultContract {
             panic_with_error!(env, VaultError::ContractStopped);
         }
 
-        Self::require_not_paused(env)?;
+        Self::require_not_paused(env, crate::pause_mask::PAUSE_WITHDRAW)?;
         // Issue #235: credit vested smoothing before pricing the exit, so a
         // leaving staker is paid out at a share price that includes it.
         Self::settle_smoothing(env);
@@ -7537,13 +7529,6 @@ impl VaultContract {
         env.storage().instance().set(&DataKey::Leaderboard, &board);
     }
 
-    fn require_not_paused(env: &Env) -> Result<(), VaultError> {
-        if Self::paused(env) {
-            Err(VaultError::VaultPaused)
-        } else {
-            Ok(())
-        }
-    }
 
     /// Issue #201. Uses `panic_with_error!` rather than returning a `Result`
     /// error: `do_stake`'s signature is `Result<i128, VaultError>`, and
@@ -7759,6 +7744,7 @@ impl VaultContract {
     /// emits the `claimed` event. Does NOT call `require_auth` — callers are
     /// responsible for gating access.
     fn do_claim(env: &Env, staker: &Address) -> Result<i128, VaultError> {
+        Self::require_not_paused(env, crate::pause_mask::PAUSE_CLAIM)?;
         Self::maybe_emit_position_expired(env, staker);
         let is_epoch_mode = env
             .storage()
@@ -7974,7 +7960,7 @@ impl VaultContract {
         Self::require_not_stopped(env)?;
         Self::require_not_shutting_down(env)?;
         Self::require_not_sunsetting(env)?;
-        Self::require_not_paused(env)?;
+        Self::require_not_paused(env, crate::pause_mask::PAUSE_DEPOSIT)?;
         // Issue #237: while auction mode is on, only auction winners may stake.
         Self::require_pool_spot(env, staker)?;
         // Issue #235: see the matching call in `do_stake`.
@@ -11891,7 +11877,7 @@ impl VaultContract {
         if amount <= 0 {
             return Err(VaultFeatureError::ZeroAmount);
         }
-        Self::require_not_paused(&env)?;
+        Self::require_not_paused(&env, crate::pause_mask::PAUSE_DEPOSIT)?;
 
         let token_addr = Self::token_address(&env)?;
         let token_client = token::Client::new(&env, &token_addr);
@@ -12742,7 +12728,7 @@ impl VaultContract {
         Self::require_not_stopped(&env)?;
         Self::require_not_shutting_down(&env)?;
         Self::require_not_sunsetting(&env)?;
-        Self::require_not_paused(&env)?;
+        Self::require_not_paused(&env, crate::pause_mask::PAUSE_DEPOSIT)?;
 
         if amount <= 0 {
             return Err(VaultError::ZeroAmount);
@@ -13237,7 +13223,7 @@ impl VaultContract {
         offer_id: u32,
     ) -> Result<(), VaultFeatureError> {
         counterparty.require_auth();
-        Self::require_not_paused(&env)?;
+        Self::require_not_paused(&env, crate::pause_mask::PAUSE_TRANSFER)?;
 
         let offer_key = Self::swap_offer_key(&env, offer_id);
         let offer: SwapOffer = env
@@ -13673,6 +13659,7 @@ impl VaultContract {
     }
 
     fn do_claim(env: &Env, staker: &Address) -> Result<i128, VaultError> {
+        Self::require_not_paused(env, crate::pause_mask::PAUSE_CLAIM)?;
         let accrued = balance::get_accrued_reward(env, staker);
         if accrued == 0 {
             return Ok(0);
@@ -15112,6 +15099,7 @@ impl VaultContract {
     pub(crate) fn unpause_by(env: &Env, actor: &Address) -> Result<(), VaultError> {
         Self::require_not_stopped(env)?;
         Self::set_paused(env, false);
+        crate::pause_mask::clear_stored(env);
         balance::clear_pause_info(env);
         balance::clear_scheduled_unpause(env);
         events::unpaused(env, actor, env.ledger().sequence());
@@ -15218,6 +15206,8 @@ pub mod quadratic_vote;
 pub mod benchmark_rate;
 #[path = "auto_claim_on_withdraw.rs"]
 pub mod auto_claim_on_withdraw;
+#[path = "pause_mask.rs"]
+pub mod pause_mask;
 #[path = "guardian_pause.rs"]
 pub mod guardian_pause;
 #[path = "guardian_veto.rs"]
