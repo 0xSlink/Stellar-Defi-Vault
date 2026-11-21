@@ -1807,7 +1807,10 @@ impl VaultContract {
             index += 1;
         }
 
-        Ok(weight)
+        // Governance source: Stake keeps the historical stake weight above,
+        // Token / Both add (or substitute) the governance-token balance.
+        let source = crate::governance_source::current_config(&env);
+        crate::governance_source::weight_from_stake(&env, &source, &user, weight)
     }
 
     /// Query how many tokens a given share count is worth right now.
@@ -9615,6 +9618,8 @@ impl VaultContract {
         balance::set_proposal(&env, id, &proposal);
         // Issue #712: freeze the quorum/threshold that apply to this proposal.
         crate::governance_params::snapshot(&env, id);
+        // Freeze the governance source (stake / token / both) for this proposal.
+        crate::governance_source::snapshot(&env, id);
         balance::set_next_proposal_id(&env, id + 1);
         balance::set_open_proposal_count(&env, balance::get_open_proposal_count(&env) + 1);
         events::proposal_created(&env, &user, id, ends_at);
@@ -9647,8 +9652,12 @@ impl VaultContract {
             return Err(VaultError::Unauthorized);
         }
 
+        // Governance source snapshotted at proposal creation. Only `Stake`
+        // requires an active staking position; `Token` / `Both` voters are
+        // checked on their resulting weight below.
+        let gov_source = crate::governance_source::proposal_config(&env, proposal_id);
         let shares = balance::get_shares(&env, &user);
-        if shares == 0 {
+        if shares == 0 && gov_source.mode == crate::governance_source::GovernanceSource::Stake {
             return Err(VaultError::PositionNotFound);
         }
         if balance::has_voted(&env, proposal_id, &user) {
@@ -9661,10 +9670,11 @@ impl VaultContract {
             return Err(VaultError::BatchKycTooLarge);
         }
 
-        let total_shares = balance::get_total_shares(&env);
-        let total_deposited = balance::get_total_deposited(&env);
-        let raw_weight = balance::shares_to_amount(total_shares, total_deposited, shares)
-            .ok_or(VaultError::ArithmeticError)?;
+        let raw_weight = crate::governance_source::raw_weight(&env, &gov_source, &user)?;
+        if raw_weight <= 0 && gov_source.mode != crate::governance_source::GovernanceSource::Stake
+        {
+            return Err(VaultError::PositionNotFound);
+        }
         // Apply weighting mode snapshotted at proposal creation time so that
         // a mode change by the admin never alters an already-open proposal.
         let own_weight = match proposal.weight_mode {
