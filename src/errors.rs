@@ -1403,3 +1403,35 @@ impl From<VaultError> for ParamReasonError {
         }
     }
 }
+
+/// Errors for the on-chain pool metadata record. `VaultError` is at
+/// Soroban's 50-variant cap, so these get their own enum.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum PoolMetadataError {
+    /// Caller is not the stored admin.
+    Unauthorized = 1,
+    /// No admin is stored.
+    NotInitialized = 2,
+    /// The metadata revision counter overflowed.
+    ArithmeticError = 3,
+    /// The pool name is empty.
+    EmptyName = 4,
+    /// The pool name is longer than 64 bytes.
+    NameTooLong = 5,
+    /// The description is longer than 512 bytes.
+    DescriptionTooLong = 6,
+    /// The website is longer than 128 bytes.
+    WebsiteTooLong = 7,
+}
+
+impl From<VaultError> for PoolMetadataError {
+    fn from(err: VaultError) -> Self {
+        match err {
+            VaultError::NotInitialized | VaultError::NoAdmin => PoolMetadataError::NotInitialized,
+            VaultError::ArithmeticError => PoolMetadataError::ArithmeticError,
+            _ => PoolMetadataError::Unauthorized,
+        }
+    }
+}
