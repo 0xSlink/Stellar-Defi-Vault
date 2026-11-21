@@ -989,6 +989,71 @@ impl VaultContract {
         Self::do_unstake(&env, &user, shares)
     }
 
+    /// Exit the whole position in one atomic call: settle and pay all pending
+    /// rewards, then burn every share and pay the principal to `recipient`.
+    ///
+    /// The principal leg is the standard unstake path (`do_unstake_to`), so the
+    /// usual unstake fee applies, along with every waiver that path already
+    /// has (withdraw-only mode, sunset, rage-quit window), plus the lock-up
+    /// penalty, cooldown rule and daily withdrawal cap. Rewards are paid to
+    /// `user` (net of the usual claim fee); only the principal goes to
+    /// `recipient`. If any step fails the whole call reverts, so a position is
+    /// never left half-exited.
+    ///
+    /// A blocked user (`address_blocklist`) still recovers their principal, but
+    /// to their own address only, and their rewards stay accrued rather than
+    /// being paid.
+    ///
+    /// Returns `(principal, reward)`: the principal actually paid to
+    /// `recipient` (after any penalty and fee) and the reward paid to `user`.
+    ///
+    /// # Authorization
+    /// `user` must sign.
+    ///
+    /// # Errors
+    /// - `PositionNotFound`: `user` has no shares.
+    /// - `Unauthorized`: re-entrant call.
+    /// - `AddressBlocked`: the recipient is blocked, or `user` is blocked and
+    ///   `recipient` is not `user`.
+    /// - `WithdrawalLimitExceeded`: exceeds the rolling 24h per-user cap.
+    /// - Every claim-path and unstake-path error (`UseCooldownFlow`,
+    ///   `InsufficientRewardPool`, `ArithmeticError`, ...).
+    ///
+    /// # Events
+    /// - `pos_exit` (`events::position_exited`) with `(principal, reward, fee,
+    ///   recipient, ledger)`, in addition to the claim/withdraw/position_closed
+    ///   events of the underlying steps.
+    pub fn exit(env: Env, user: Address, recipient: Address) -> Result<(i128, i128), VaultError> {
+        let _guard = ReentrancyGuard::new(&env)?;
+        user.require_auth();
+
+        let shares = balance::get_shares(&env, &user);
+        if shares <= 0 {
+            return Err(VaultError::PositionNotFound);
+        }
+        crate::address_blocklist::require_withdrawal_allowed(&env, &user, &recipient)?;
+        crate::daily_withdrawal_limit::enforce_and_record(
+            &env,
+            &user,
+            Self::projected_unstake_amount(&env, shares)?,
+        )?;
+
+        // Rewards first, so they are settled before the shares are burned. A
+        // blocked user is never paid; their rewards stay accrued.
+        let reward = if crate::address_blocklist::is_blocked(&env, &user) {
+            0
+        } else {
+            Self::do_claim(&env, &user)?
+        };
+
+        let fees_before = balance::get_protocol_fee_collected(&env);
+        let principal = Self::do_unstake_to(&env, &user, shares, &recipient)?;
+        let fee = balance::get_protocol_fee_collected(&env) - fees_before;
+
+        events::position_exited(&env, &user, &recipient, principal, reward, fee);
+        Ok((principal, reward))
+    }
+
     /// The underlying token amount `shares` would convert to right now,
     /// matching `do_unstake`'s own (pre-fee) conversion exactly since both
     /// read the same current `total_shares`/`total_deposited` state.

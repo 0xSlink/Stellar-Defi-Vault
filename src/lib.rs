@@ -197,3 +197,6 @@ mod test_feature_flags;
 
 #[cfg(test)]
 mod test_address_blocklist;
+
+#[cfg(test)]
+mod test_exit;
