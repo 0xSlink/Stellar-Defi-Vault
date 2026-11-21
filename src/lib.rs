@@ -54,6 +54,7 @@ pub mod rage_quit; // fee-free exit window during notice periods
 pub mod param_reasons; // reason strings on admin parameter changes
 pub mod upgrade_queue; // upgrader role + delayed, cancellable Wasm upgrades
 pub mod min_claim_amount; // minimum claim amount
+pub mod versioned; // versioned enum wrappers for persisted structs
 pub mod pool_metadata; // on-chain pool name/description/website/icon for frontends
 pub mod minimum_unstake_amount; // issue #441 â€” minimum unstake amount
 pub mod peg_stabilization;
@@ -193,3 +194,6 @@ mod test_rage_quit;
 
 #[cfg(test)]
 mod test_pool_metadata;
+
+#[cfg(test)]
+mod test_versioned_storage;
