@@ -77,6 +77,12 @@ pub enum DataKey {
     // matching the pattern already established here for the same reason
     // (e.g. symbol_short!("pool_cp"), symbol_short!("sl_tr"), the
     // Symbol::new(env, "prop")/"voted" tuple keys above).
+    // Issues #822-#825: new features
+    // Issue #822: exact-output variants
+    // Issue #823: transaction deadline
+    // Issue #824: third-party submission
+    // Issue #825: streaming reward funding
+    PriorityFee,
 }
 
 /// Storage key for an individual epoch snapshot.
