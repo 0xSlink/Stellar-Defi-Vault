@@ -229,11 +229,12 @@ mod test_reward_projection;
 
 #[cfg(test)]
 mod test_reward_window;
+
 #[cfg(test)]
-mod test_issue_938;
+mod test_issue_941_contractmeta_security;
+
 #[cfg(test)]
-mod test_issue_937;
+mod test_issue_945_multi_token_treasury;
+
 #[cfg(test)]
-mod test_issue_932;
-#[cfg(test)]
-mod test_issue_933;
+mod test_issue_946_key_management_docs;

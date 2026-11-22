@@ -243,6 +243,10 @@ This contract is unaudited. Do not use in production without an independent secu
 1. **GitHub Security Advisories (preferred):** open a private advisory at [`../../security/advisories/new`](../../security/advisories/new). This reaches maintainers directly without disclosing anything publicly, and lets you collaborate privately on a fix before it's published. It does not require a GitHub account to have any special access beyond being signed in.
 2. **Email:** no dedicated security mailbox is configured for this project yet. Until one is, GitHub Security Advisories is the only private channel this policy can point to — maintainers should add a monitored `security@` alias here once one exists, rather than researchers needing to guess at one.
 
+**Security contact:** [GitHub Security Advisory](https://github.com/Rickyy1017/Stellar-Defi-Vault/security/advisories/new)  
+**Source repository:** [Rickyy1017/Stellar-Defi-Vault](https://github.com/Rickyy1017/Stellar-Defi-Vault)  
+**Security policy:** [docs/SECURITY.md](https://github.com/Rickyy1017/Stellar-Defi-Vault/blob/main/docs/SECURITY.md)
+
 Please include, at minimum:
 
 - the affected contract function(s) or file(s),
