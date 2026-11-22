@@ -12,6 +12,11 @@ Closes #<!-- issue number — required so the Drips bot can track the PR -->
 
 <!-- What does this PR change, and why? Note any design decisions reviewers should know about. -->
 
+## Release note
+
+<!-- One-line changelog entry for release notes (or "None" for internal/chore PRs). -->
+Release note: 
+
 ## Changes
 
 <!-- Bullet list of the main changes (files/modules touched, new public functions, etc.). -->

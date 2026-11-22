@@ -6,6 +6,22 @@
 - A clean working tree on `main` (no uncommitted changes).
 - `Cargo.lock` committed (it already is; never remove it from version control).
 
+## Automated Release Drafts (Release Drafter)
+
+Every merge to `main` updates a **draft** GitHub release via
+[`.github/workflows/release-drafter.yml`](../.github/workflows/release-drafter.yml)
+and [`.github/release-drafter.yml`](../.github/release-drafter.yml):
+
+- Merged PRs are grouped into categories (`Breaking Changes`, `Security`,
+  `Features`, `Bug Fixes`, `Documentation`, `Dependencies & Maintenance`) based on
+  their PR labels.
+- Version bump resolution is driven by labels: `breaking` / `breaking-change` /
+  `semver:major` force a **major** bump, `enhancement` / `feature` / `feat` /
+  `semver:minor` select a **minor** bump, and other PRs default to **patch**.
+- Drafts are created with `publish: false` — a maintainer **must** review the
+  draft release notes, verify the resolved version, and sync `CHANGELOG.md` and
+  `Cargo.toml` before tagging or publishing.
+
 ## Steps
 
 1. **Bump the version** in `Cargo.toml`:
