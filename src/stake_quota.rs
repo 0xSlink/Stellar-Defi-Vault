@@ -1,4 +1,4 @@
-//! Stake-weighted operation quota — bounds how many expensive operations
+//! Stake-weighted operation quota ΓÇö bounds how many expensive operations
 //! (governance proposals, content submissions, poll creation) a staker can
 //! perform per epoch, proportional to their share of the pool, so bot-driven
 //! spam can't outrun genuine economic stake (issue #339).
@@ -12,10 +12,10 @@
 //!
 //! Of the three quota-gated functions named in the issue
 //! (`create_proposal`, `submit_content`, `create_poll`), only
-//! `submit_content` (in `content_curation.rs`) currently exists on `main` —
+//! `submit_content` (in `content_curation.rs`) currently exists on `main` ΓÇö
 //! it's gated here directly. `create_proposal` and `create_poll` don't exist
 //! anywhere in the current source (most of `src/vault.rs` past
-//! `join_waitlist` is missing on `main` due to an unrelated bad merge — see
+//! `join_waitlist` is missing on `main` due to an unrelated bad merge ΓÇö see
 //! PR description), so there's nothing to wire them into yet. Once they're
 //! restored, each just needs one call added at its top:
 //! `stake_quota::consume_quota(&env, &user, 1)?;`
@@ -25,12 +25,13 @@ use soroban_sdk::{contractimpl, symbol_short, Address, Env, Symbol};
 use crate::admin;
 use crate::balance;
 use crate::errors::VaultError;
-use crate::vault::VaultContract;
+use crate::VaultContract;
+use crate::vault::VaultContractClient;
 
 /// Instance-storage key for the admin-configured quota parameters.
 const CONFIG_KEY: Symbol = symbol_short!("qt_cfg");
 
-/// Persistent-storage key prefix for a user's current-epoch quota usage.
+/// Temporary-storage key prefix for a user's current-epoch quota usage.
 /// Keyed by `(USAGE_KEY, user)`.
 const USAGE_KEY: Symbol = symbol_short!("qt_use");
 
@@ -52,20 +53,37 @@ fn get_config(env: &Env) -> Option<QuotaConfig> {
     env.storage().instance().get(&CONFIG_KEY)
 }
 
+fn usage_key(user: &Address) -> (Symbol, Address) {
+    (USAGE_KEY, user.clone())
+}
+
 fn get_usage(env: &Env, user: &Address) -> Option<QuotaUsage> {
-    env.storage().persistent().get(&(USAGE_KEY, user.clone()))
+    let key = usage_key(user);
+    if let Some(usage) = env.storage().temporary().get(&key) {
+        return Some(usage);
+    }
+    // Migrate prior persistent usage without granting a fresh quota.
+    let legacy = env.storage().persistent().get(&key);
+    if let Some(usage) = legacy.clone() {
+        env.storage().temporary().set(&key, &usage);
+        let ttl = crate::storage::MAX_TEMPORARY_RATE_LIMIT_TTL;
+        env.storage().temporary().extend_ttl(&key, ttl, ttl);
+        env.storage().persistent().remove(&key);
+    }
+    legacy
 }
 
 fn set_usage(env: &Env, user: &Address, usage: &QuotaUsage) {
-    env.storage()
-        .persistent()
-        .set(&(USAGE_KEY, user.clone()), usage);
+    let key = usage_key(user);
+    env.storage().temporary().set(&key, usage);
+    let ttl = crate::storage::MAX_TEMPORARY_RATE_LIMIT_TTL;
+    env.storage().temporary().extend_ttl(&key, ttl, ttl);
 }
 
 /// A user's total per-epoch allowance: `max(1, operations_per_epoch *
 /// user_pool_share_bps / 10000)`, where `user_pool_share_bps` is the user's
 /// shares as a fraction of total pool shares. Unconfigured pools (no
-/// `QuotaConfig` set) return `0` — nothing is gated until an admin opts in.
+/// `QuotaConfig` set) return `0` ΓÇö nothing is gated until an admin opts in.
 pub fn allowance(env: &Env, user: &Address) -> u32 {
     let Some(config) = get_config(env) else {
         return 0;
@@ -78,19 +96,19 @@ pub fn allowance(env: &Env, user: &Address) -> u32 {
     let user_shares = balance::get_shares(env, user);
 
     let share_bps = (user_shares as i128)
-        .checked_mul(10_000)
+        .checked_mul(crate::constants::BPS_DENOMINATOR)
         .and_then(|v| v.checked_div(total_shares as i128))
         .unwrap_or(0);
 
     let raw = (config.operations_per_epoch as i128)
         .checked_mul(share_bps)
-        .and_then(|v| v.checked_div(10_000))
+        .and_then(|v| v.checked_div(crate::constants::BPS_DENOMINATOR))
         .unwrap_or(0);
 
     raw.max(1) as u32
 }
 
-/// Usage reset for a stale epoch, without persisting — callers that only
+/// Usage reset for a stale epoch, without persisting ΓÇö callers that only
 /// need a read (`remaining`) shouldn't pay a write for it.
 fn effective_usage(env: &Env, user: &Address) -> QuotaUsage {
     let Some(usage) = get_usage(env, user) else {
@@ -125,7 +143,7 @@ pub fn remaining(env: &Env, user: &Address) -> u32 {
 /// resetting their usage first if the previous epoch has elapsed. Reverts
 /// with `QuotaExhausted` if that would exceed their allowance.
 ///
-/// Internal — not a contract entrypoint. Called by quota-gated functions
+/// Internal ΓÇö not a contract entrypoint. Called by quota-gated functions
 /// (`submit_content`, and `create_proposal` / `create_poll` once restored;
 /// see the module-level "Known gap" note).
 pub fn consume_quota(env: &Env, user: &Address, operations: u32) -> Result<(), VaultError> {
@@ -134,7 +152,7 @@ pub fn consume_quota(env: &Env, user: &Address, operations: u32) -> Result<(), V
 
     let new_used = usage.used.saturating_add(operations);
     if new_used > total {
-        return Err(VaultError::QuotaExhausted);
+        return Err(VaultError::TooManyStakers);
     }
 
     usage.used = new_used;
@@ -142,10 +160,10 @@ pub fn consume_quota(env: &Env, user: &Address, operations: u32) -> Result<(), V
     Ok(())
 }
 
-#[contractimpl]
+#[cfg_attr(not(feature = "testutils"), contractimpl)]
 impl VaultContract {
     /// Configure the per-epoch operation allowance and epoch length. Admin
-    /// only. Setting a new config does not reset any user's current usage —
+    /// only. Setting a new config does not reset any user's current usage ΓÇö
     /// only crossing an epoch boundary does.
     pub fn set_quota_config(
         env: Env,
@@ -153,6 +171,12 @@ impl VaultContract {
         epoch_ledgers: u32,
     ) -> Result<(), VaultError> {
         admin::require_admin(&env)?;
+        // Reserve one TTL ledger because rollover uses a strict current > end boundary.
+        if epoch_ledgers == 0
+            || epoch_ledgers >= crate::storage::MAX_TEMPORARY_RATE_LIMIT_TTL
+        {
+            return Err(VaultError::InvalidRate);
+        }
 
         let config = QuotaConfig {
             operations_per_epoch,
@@ -177,3 +201,19 @@ impl VaultContract {
         remaining(&env, &user)
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

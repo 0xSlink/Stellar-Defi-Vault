@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "name": "configure fee and fully exit",
+  "steps": [
+    { "action": "deposit", "actor": "bob", "args": { "amount": 1500 } },
+    { "action": "set_fee", "actor": "admin", "args": { "bps": 100 } },
+    { "action": "unstake", "actor": "bob", "args": { "shares": 1500 } }
+  ],
+  "expected": [
+    { "type": "shares", "actor": "bob", "equals": 0 },
+    { "type": "total_shares", "equals": 0 },
+    { "type": "last_result", "equals": 1485 },
+    { "type": "fee_bps", "equals": 100 }
+  ]
+}

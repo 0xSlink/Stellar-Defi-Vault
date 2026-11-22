@@ -1,13 +1,52 @@
+//! Typed storage accessor layer and state management.
+//!
+//! Split into focused submodules by responsibility (Issue #647, #648):
+//! - `positions`: user positions, share balances, deposits, lockups, and unbonding
+//! - `shares`: share/amount conversion math
+//! - `rewards`: reward rates, rate history, pool balances, checkpoints, and precision
+//! - `governance_store`: proposals, voting weights, delegates, vetoes, and pending actions
+//! - `burns`: fees burned, fee reserves, penalties, receipts, and slashing treasury
+//! - `config`: protocol configuration, staker registries, changelog, and modular features
+
+pub mod burns;
+pub mod config;
+pub mod governance_store;
+pub mod positions;
+pub mod rewards;
+pub mod shares;
+
+pub use burns::*;
+pub use config::*;
+pub use governance_store::*;
+pub use positions::*;
+pub use rewards::*;
+pub use shares::*;
+use crate::errors::VaultInvariantError;
 use crate::storage::{
     AccessTier, AdminProposal, AutoConvertConfig, BrandingConfig, ChangelogEntry, ClaimWindow,
     ContractDelegate, DataKey, DayBucket, DynamicFeeConfig, FeeRecipient, FlashStakeReceipt,
     GovernanceProposal, InsurancePolicy, InsuranceProduct, Loan, LoanConfig, LotteryConfig,
     Milestone, MultisigConfig, OnboardingChecklist, PendingAction, PriceCondition,
-    PriorityBidRecord, RateHistoryEntry, ReferralStats, RewardTier, RevenueShareMerkleRoot,
-    RevenueSharingConfig, Season, StakePosition, SunsetState, VestingEntry,
+    PriorityBidRecord, Quiz, RateHistoryEntry, ReferralStats, RevenueShareMerkleRoot,
+    RevenueSharingConfig, RewardTier, Season, StakePosition, SunsetState, VestingEntry,
 };
 
-use soroban_sdk::{symbol_short, Address, Env, String, Symbol, Vec};
+use soroban_sdk::{panic_with_error, symbol_short, Address, Env, String, Symbol, Vec};
+
+/// Issue #621: last-line-of-defense invariant for every accounting field
+/// this module persists. `i128` is signed, so nothing at the type level stops
+/// a caller from writing a negative share/reward/pool balance — this makes
+/// that impossible in practice by rejecting the write instead. See the
+/// `VaultInvariantError` doc comment in `errors.rs` for why this panics
+/// rather than returning a `Result` (these setters have no `Result` in their
+/// signature, and giving them one would mean updating every one of their
+/// call sites across the crate for a condition that should never occur if
+/// upstream business logic is correct).
+fn assert_non_negative(env: &Env, value: i128) {
+    if value < 0 {
+        panic_with_error!(env, VaultInvariantError::NegativeBalance);
+    }
+}
 
 pub fn get_shares(env: &Env, user: &Address) -> i128 {
     env.storage()
@@ -17,9 +56,14 @@ pub fn get_shares(env: &Env, user: &Address) -> i128 {
 }
 
 pub fn set_shares(env: &Env, user: &Address, amount: i128) {
+    assert_non_negative(env, amount);
+    // Issue #699: extra reward tokens accrue per share, so settle them at the
+    // old share count before it changes.
+    crate::vault::multi_reward_tokens::settle_user(env, user);
     env.storage()
         .persistent()
         .set(&DataKey::ShareBalance(user.clone()), &amount);
+    crate::balance_checkpoints::record_user(env, user, amount);
 }
 
 pub fn get_total_shares(env: &Env) -> i128 {
@@ -30,7 +74,9 @@ pub fn get_total_shares(env: &Env) -> i128 {
 }
 
 pub fn set_total_shares(env: &Env, total: i128) {
+    assert_non_negative(env, total);
     env.storage().instance().set(&DataKey::TotalShares, &total);
+    crate::balance_checkpoints::record_total(env, total);
 }
 
 pub fn get_total_deposited(env: &Env) -> i128 {
@@ -41,6 +87,7 @@ pub fn get_total_deposited(env: &Env) -> i128 {
 }
 
 pub fn set_total_deposited(env: &Env, total: i128) {
+    assert_non_negative(env, total);
     env.storage()
         .instance()
         .set(&DataKey::TotalDeposited, &total);
@@ -78,21 +125,121 @@ pub fn get_reward_tiers(env: &Env) -> Vec<RewardTier> {
 }
 
 pub fn set_reward_tiers(env: &Env, tiers: &Vec<RewardTier>) {
-    env.storage().instance().set(&symbol_short!("rwtiers"), tiers);
+    env.storage()
+        .instance()
+        .set(&symbol_short!("rwtiers"), tiers);
 }
 
-pub fn get_rate_history(env: &Env) -> Vec<(u32, u32)> {
+/// Get the maximum number of quizzes allowed.
+pub fn get_max_quizzes(_: &Env) -> u32 {
+    MAX_QUIZZES
+}
+
+/// Get quiz data by ID.
+pub fn get_quiz(env: &Env, quiz_id: u32) -> Option<Quiz> {
+    let key = (Symbol::new(env, "quiz"), quiz_id);
+    env.storage().persistent().get(&key)
+}
+
+/// Set quiz data by ID.
+pub fn set_quiz(env: &Env, quiz: &Quiz) {
+    let key = (Symbol::new(env, "quiz"), quiz.id);
+    env.storage().persistent().set(&key, quiz);
+}
+
+/// Get the number of remaining attempts for a user on a specific quiz.
+pub fn get_quiz_attempts_remaining(env: &Env, user: &Address, quiz_id: u32) -> u32 {
+    let key = (Symbol::new(env, "quiz_attempts"), user.clone(), quiz_id);
+    env.storage().persistent().get(&key).unwrap_or(0)
+}
+
+/// Returns `None` if the user has never had attempts initialized for this quiz
+/// (i.e. they haven't submitted a wrong answer yet), `Some(n)` otherwise.
+/// This lets callers distinguish between "not yet started" and "0 remaining".
+pub fn get_quiz_attempts_remaining_opt(env: &Env, user: &Address, quiz_id: u32) -> Option<u32> {
+    let key = (Symbol::new(env, "quiz_attempts"), user.clone(), quiz_id);
+    env.storage().persistent().get(&key)
+}
+
+/// Set the number of remaining attempts for a user on a specific quiz.
+pub fn set_quiz_attempts_remaining(env: &Env, user: &Address, quiz_id: u32, attempts: u32) {
+    let key = (Symbol::new(env, "quiz_attempts"), user.clone(), quiz_id);
+    env.storage().persistent().set(&key, &attempts);
+}
+
+/// Get the list of completed quiz IDs for a user.
+pub fn get_completed_quizzes(env: &Env, user: &Address) -> Vec<u32> {
+    let key = (Symbol::new(env, "completed_quizzes"), user.clone());
+    env.storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or(Vec::new(env))
+}
+
+/// Set the list of completed quiz IDs for a user.
+pub fn set_completed_quizzes(env: &Env, user: &Address, completed_quizzes: &Vec<u32>) {
+    let key = (Symbol::new(env, "completed_quizzes"), user.clone());
+    env.storage().persistent().set(&key, completed_quizzes);
+}
+
+/// Get the highest reward tier unlocked by a user via quiz completion.
+pub fn get_user_quiz_tier(env: &Env, user: &Address) -> u32 {
+    let key = (Symbol::new(env, "user_quiz_tier"), user.clone());
+    env.storage().persistent().get(&key).unwrap_or(0)
+}
+
+/// Set the highest reward tier unlocked by a user via quiz completion.
+pub fn set_user_quiz_tier(env: &Env, user: &Address, tier: u32) {
+    let key = (Symbol::new(env, "user_quiz_tier"), user.clone());
+    env.storage().persistent().set(&key, &tier);
+}
+
+/// Get the total number of quizzes that have been created.
+pub fn get_quiz_count(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&Symbol::new(env, "quiz_count"))
+        .unwrap_or(0)
+}
+
+/// Set the total quiz count.
+pub fn set_quiz_count(env: &Env, count: u32) {
+    env.storage()
+        .instance()
+        .set(&Symbol::new(env, "quiz_count"), &count);
+}
+
+/// The rolling on-chain log of reward-rate changes written by `set_reward_rate_bps`
+/// and exposed by `get_rate_history` (issue #522), oldest entry first.
+pub fn get_rate_history(env: &Env) -> Vec<RateChange> {
     env.storage()
         .instance()
         .get(&DataKey::RateHistory)
         .unwrap_or(Vec::new(env))
 }
 
-pub fn set_rate_history(env: &Env, history: &Vec<(u32, u32)>) {
+pub fn set_rate_history(env: &Env, history: &Vec<RateChange>) {
     env.storage().instance().set(&DataKey::RateHistory, history);
 }
 
+/// Appends one reward-rate change to the rolling log, evicting the oldest
+/// entries first once `MAX_RATE_HISTORY_ENTRIES` is reached. Changes are logged
+/// even when the rate is unchanged, matching the `rate_changed` event.
+pub fn record_rate_change(env: &Env, old_rate_bps: u32, new_rate_bps: u32) {
+    let mut history = get_rate_history(env);
+    while history.len() >= MAX_RATE_HISTORY_ENTRIES {
+        history.remove(0);
+    }
+    history.push_back(RateChange {
+        old_rate_bps,
+        new_rate_bps,
+        changed_at: env.ledger().sequence(),
+    });
+    set_rate_history(env, &history);
+}
+
 pub const MAX_RATE_HISTORY_ENTRIES: u32 = 50;
+pub const MAX_QUIZZES: u32 = 20;
 
 /// Maximum allowed reward rate in basis points (500% APR). Issue #72.
 pub const MAX_RATE_BPS: u32 = 50_000;
@@ -105,6 +252,7 @@ pub fn get_reward_pool_balance(env: &Env) -> i128 {
 }
 
 pub fn set_reward_pool_balance(env: &Env, balance: i128) {
+    assert_non_negative(env, balance);
     env.storage()
         .instance()
         .set(&DataKey::RewardPoolBalance, &balance);
@@ -170,6 +318,7 @@ pub fn get_accrued_reward(env: &Env, user: &Address) -> i128 {
 }
 
 pub fn set_accrued_reward(env: &Env, user: &Address, amount: i128) {
+    assert_non_negative(env, amount);
     env.storage()
         .persistent()
         .set(&DataKey::AccruedReward(user.clone()), &amount);
@@ -214,6 +363,7 @@ pub fn get_total_rewards_paid(env: &Env) -> i128 {
 }
 
 pub fn set_total_rewards_paid(env: &Env, amount: i128) {
+    assert_non_negative(env, amount);
     env.storage()
         .instance()
         .set(&DataKey::TotalRewardsPaid, &amount);
@@ -426,13 +576,44 @@ pub fn set_all_stakers(env: &Env, stakers: &Vec<Address>) {
     env.storage().instance().set(&DataKey::AllStakers, stakers);
 }
 
+/// Records `user` in the staker registry if they are not already present and
+/// refreshes the `total_stakers` count. Idempotent, so callers can invoke it on
+/// every stake without worrying about duplicates. Keeps the registry (and thus
+/// `get_pool_summary().depositor_count`) in sync with real depositors.
+pub fn register_staker(env: &Env, user: &Address) {
+    let mut stakers = get_all_stakers(env);
+    let already_present = stakers.iter().any(|a| &a == user);
+    if !already_present {
+        stakers.push_back(user.clone());
+        env.storage()
+            .instance()
+            .set(&DataKey::AllStakers, &stakers);
+    }
+    env.storage()
+        .instance()
+        .set(&DataKey::TotalStakers, &stakers.len());
+}
+
 // ── Share math ────────────────────────────────────────────────────────────────
 
 /// Convert a deposit amount to shares using current vault ratio.
-/// First deposit: 1:1. Subsequent: proportional to existing pool.
+/// First deposit: scale the token amount into the vault's fixed share
+/// precision. Subsequent deposits are proportional to the existing pool.
 pub fn amount_to_shares(total_shares: i128, total_deposited: i128, amount: i128) -> Option<i128> {
+    amount_to_shares_with_decimals(total_shares, total_deposited, amount, DEFAULT_TOKEN_DECIMALS)
+}
+
+/// Convert token base units to shares. Shares intentionally use seven decimal
+/// places, while the underlying token may use a different precision. The
+/// decimal argument is the precision queried from the configured token.
+pub fn amount_to_shares_with_decimals(
+    total_shares: i128,
+    total_deposited: i128,
+    amount: i128,
+    token_decimals: u32,
+) -> Option<i128> {
     if total_shares == 0 || total_deposited == 0 {
-        Some(amount)
+        scale_amount(amount, token_decimals, DEFAULT_TOKEN_DECIMALS)
     } else {
         amount
             .checked_mul(total_shares)?
@@ -442,12 +623,35 @@ pub fn amount_to_shares(total_shares: i128, total_deposited: i128, amount: i128)
 
 /// Convert shares to the underlying token amount.
 pub fn shares_to_amount(total_shares: i128, total_deposited: i128, shares: i128) -> Option<i128> {
+    shares_to_amount_with_decimals(total_shares, total_deposited, shares, DEFAULT_TOKEN_DECIMALS)
+}
+
+/// Convert shares in the fixed seven-decimal share precision to underlying
+/// token base units. The ratio already includes the initial decimal scaling.
+pub fn shares_to_amount_with_decimals(
+    total_shares: i128,
+    total_deposited: i128,
+    shares: i128,
+    _token_decimals: u32,
+) -> Option<i128> {
     if total_shares == 0 {
         Some(0)
     } else {
         shares
             .checked_mul(total_deposited)?
             .checked_div(total_shares)
+    }
+}
+
+fn scale_amount(amount: i128, from_decimals: u32, to_decimals: u32) -> Option<i128> {
+    if from_decimals == to_decimals {
+        return Some(amount);
+    }
+
+    if from_decimals < to_decimals {
+        amount.checked_mul(10_i128.checked_pow(to_decimals - from_decimals)?)
+    } else {
+        amount.checked_div(10_i128.checked_pow(from_decimals - to_decimals)?)
     }
 }
 
@@ -459,6 +663,7 @@ pub fn get_reward_remainder(env: &Env, user: &Address) -> i128 {
 }
 
 pub fn set_reward_remainder(env: &Env, user: &Address, amount: i128) {
+    assert_non_negative(env, amount);
     env.storage()
         .persistent()
         .set(&DataKey::RewardRemainder(user.clone()), &amount);
@@ -768,6 +973,7 @@ pub fn get_total_rewards_added(env: &Env) -> i128 {
 }
 
 pub fn set_total_rewards_added(env: &Env, total: i128) {
+    assert_non_negative(env, total);
     let key = (Symbol::new(env, "tot_rwds"),);
     env.storage().instance().set(&key, &total);
 }
@@ -851,6 +1057,47 @@ pub fn clear_pause_info(env: &Env) {
     env.storage().instance().remove(&symbol_short!("ps_info"));
 }
 
+// ── Issue #556: scheduled auto-unpause ───────────────────────────────────────
+
+/// Ledger sequence at which a `pause_until`-scheduled pause should be lifted,
+/// if any. Lazily evaluated on the next call that checks pause state —
+/// Soroban has no native scheduled execution, so nothing runs in the
+/// background; this is just the target the next call compares against.
+pub fn get_scheduled_unpause(env: &Env) -> Option<u32> {
+    env.storage().instance().get(&symbol_short!("sch_unp"))
+}
+
+pub fn set_scheduled_unpause(env: &Env, target_ledger: u32) {
+    env.storage()
+        .instance()
+        .set(&symbol_short!("sch_unp"), &target_ledger);
+}
+
+pub fn clear_scheduled_unpause(env: &Env) {
+    env.storage().instance().remove(&symbol_short!("sch_unp"));
+}
+
+/// Lazily lifts a `pause_until`-scheduled pause once `target_ledger` is
+/// reached (issue #556). Soroban has no native scheduled execution, so this
+/// only ever runs as a side effect of some other call arriving — if no one
+/// calls the contract after the target ledger, the pause stays in storage
+/// (still correctly reported as paused) until the next call clears it.
+/// `pub(crate)` free function rather than a `VaultContract` method so every
+/// mutating entrypoint that gates on pause state can call it, including
+/// ones outside `vault.rs` (e.g. `xlm_wrapper_integration.rs`).
+pub(crate) fn apply_scheduled_unpause_if_due(env: &Env) {
+    if let Some(target_ledger) = get_scheduled_unpause(env) {
+        if env.ledger().sequence() >= target_ledger {
+            env.storage().instance().set(&DataKey::Paused, &false);
+            clear_pause_info(env);
+            clear_scheduled_unpause(env);
+            let current_ledger = env.ledger().sequence();
+            crate::events::auto_unpaused(env, current_ledger);
+            set_last_updated_ledger(env, current_ledger);
+        }
+    }
+}
+
 // ── Issue #218: migration target ─────────────────────────────────────────────
 
 pub fn get_migration_target(env: &Env) -> Option<Address> {
@@ -898,6 +1145,7 @@ pub fn get_yield_deployed(env: &Env) -> i128 {
 }
 
 pub fn set_yield_deployed(env: &Env, amount: i128) {
+    assert_non_negative(env, amount);
     env.storage()
         .instance()
         .set(&symbol_short!("yld_dep"), &amount);
@@ -931,14 +1179,17 @@ pub fn set_open_proposal_count(env: &Env, count: u32) {
         .set(&symbol_short!("prop_opn"), &count);
 }
 
+/// Read a proposal, normalizing any stored version (or the pre-versioning bare
+/// struct) to the latest in-memory form. See `crate::versioned`.
 pub fn get_proposal(env: &Env, id: u32) -> Option<GovernanceProposal> {
     let key = (Symbol::new(env, "prop"), id);
-    env.storage().persistent().get(&key)
+    crate::versioned::read_proposal(env, &key)
 }
 
+/// Write a proposal in the newest versioned storage form.
 pub fn set_proposal(env: &Env, id: u32, proposal: &GovernanceProposal) {
     let key = (Symbol::new(env, "prop"), id);
-    env.storage().persistent().set(&key, proposal);
+    crate::versioned::write_proposal(env, &key, proposal);
 }
 
 pub fn has_voted(env: &Env, proposal_id: u32, voter: &Address) -> bool {
@@ -1001,17 +1252,24 @@ pub fn set_bridge_enabled(env: &Env, enabled: bool) {
 
 // ── Issue #209: additive split positions ─────────────────────────────────────
 
+/// Read a user's split positions, normalizing every entry to the latest
+/// in-memory form. See `crate::versioned`.
 pub fn get_split_positions(env: &Env, user: &Address) -> Vec<StakePosition> {
+    let key = (Symbol::new(env, "splitpos"), user.clone());
+    let raw: Vec<soroban_sdk::Val> = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or(Vec::new(env));
+    crate::versioned::decode_positions(env, raw)
+}
+
+/// Write a user's split positions in the newest versioned storage form.
+pub fn set_split_positions(env: &Env, user: &Address, positions: &Vec<StakePosition>) {
     let key = (Symbol::new(env, "splitpos"), user.clone());
     env.storage()
         .persistent()
-        .get(&key)
-        .unwrap_or(Vec::new(env))
-}
-
-pub fn set_split_positions(env: &Env, user: &Address, positions: &Vec<StakePosition>) {
-    let key = (Symbol::new(env, "splitpos"), user.clone());
-    env.storage().persistent().set(&key, positions);
+        .set(&key, &crate::versioned::encode_positions(env, positions));
 }
 
 // ── Issue #205: DEX router used by swap_and_stake ────────────────────────────
@@ -1036,6 +1294,7 @@ pub fn get_total_ever_staked(env: &Env) -> i128 {
 }
 
 pub fn set_total_ever_staked(env: &Env, total: i128) {
+    assert_non_negative(env, total);
     env.storage()
         .instance()
         .set(&symbol_short!("everstk"), &total);
@@ -1222,6 +1481,7 @@ pub fn get_insurance_fund_balance(env: &Env) -> i128 {
 }
 
 pub fn set_insurance_fund_balance(env: &Env, amount: i128) {
+    assert_non_negative(env, amount);
     env.storage()
         .instance()
         .set(&symbol_short!("ins_fund"), &amount);
@@ -1402,6 +1662,61 @@ pub fn add_tokens_burned(env: &Env, amount: i128) {
     env.storage()
         .instance()
         .set(&symbol_short!("tot_burn"), &total);
+    // Issue #452: check burn milestones without importing module to avoid cycle
+    {
+        let thresholds: soroban_sdk::Vec<i128> = env
+            .storage()
+            .instance()
+            .get(&symbol_short!("burn_thr"))
+            .unwrap_or(soroban_sdk::Vec::new(env));
+        if !thresholds.is_empty() {
+            let total_fees: i128 = env
+                .storage()
+                .instance()
+                .get(&symbol_short!("fbb_brn"))
+                .unwrap_or(0);
+            let total_burned = total.saturating_add(total_fees);
+            let mut reached: soroban_sdk::Vec<bool> = env
+                .storage()
+                .instance()
+                .get(&symbol_short!("burn_hit"))
+                .unwrap_or(soroban_sdk::Vec::new(env));
+            if reached.len() != thresholds.len() {
+                let mut new_reached = soroban_sdk::Vec::new(env);
+                for _ in 0..thresholds.len() {
+                    new_reached.push_back(false);
+                }
+                let min_len = if reached.len() < thresholds.len() {
+                    reached.len()
+                } else {
+                    thresholds.len()
+                };
+                for i in 0..min_len {
+                    new_reached.set(i, reached.get(i).unwrap());
+                }
+                reached = new_reached;
+            }
+            let ledger = env.ledger().sequence();
+            let mut changed = false;
+            for i in 0..thresholds.len() {
+                let thr = thresholds.get(i).unwrap();
+                let is_reached = reached.get(i).unwrap();
+                if !is_reached && total_burned >= thr {
+                    reached.set(i, true);
+                    changed = true;
+                    env.events().publish(
+                        (symbol_short!("burn_ms"),),
+                        (thr, total_burned, amount, ledger),
+                    );
+                }
+            }
+            if changed {
+                env.storage()
+                    .instance()
+                    .set(&symbol_short!("burn_hit"), &reached);
+            }
+        }
+    }
 }
 
 // ── Issue #231: Halving Schedule ──────────────────────────────────────────────
@@ -1443,14 +1758,47 @@ pub fn next_halving_at(env: &Env) -> Option<u32> {
     })
 }
 
-/// Compute the effective rate with halving applied: `base_rate / (2 ^ halving_count)`,
-/// floored at `floor_rate_bps`. If no halving config exists, returns base_rate.
+/// Default per-interval reduction (50%) used when a halving schedule has no
+/// explicit `reduction_bps` stored, i.e. a schedule written before issue #701.
+pub const DEFAULT_HALVING_REDUCTION_BPS: u32 = 5_000;
+
+/// Issue #701: per-interval reduction of the halving schedule, in bps.
+pub fn get_halving_reduction_bps(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&symbol_short!("halv_red"))
+        .unwrap_or(DEFAULT_HALVING_REDUCTION_BPS)
+}
+
+pub fn set_halving_reduction_bps(env: &Env, reduction_bps: u32) {
+    env.storage()
+        .instance()
+        .set(&symbol_short!("halv_red"), &reduction_bps);
+}
+
+/// Issue #701: remove the halving schedule so the static rate applies again.
+pub fn clear_halving_config(env: &Env) {
+    env.storage().instance().remove(&symbol_short!("halvcfg"));
+    env.storage().instance().remove(&symbol_short!("halv_red"));
+}
+
+/// Compute the effective rate with the reduction schedule applied: the base
+/// rate is cut by `reduction_bps` once per elapsed interval (a 5_000 bps cut
+/// is the classic halving, `base_rate / 2^halving_count`), never going below
+/// `floor_rate_bps`. If no halving config exists, returns base_rate.
 pub fn halving_adjusted_rate(env: &Env, base_rate_bps: u32, ledger: u32) -> i128 {
     match get_halving_config(env) {
         Some(config) => {
             let count = halving_count_at(env, ledger);
-            let divisor = 1i128 << count; // 2^count
-            let effective = (base_rate_bps as i128) / divisor;
+            let keep_bps = crate::constants::BPS_DENOMINATOR - get_halving_reduction_bps(env) as i128;
+            let mut effective = base_rate_bps as i128;
+            let mut applied = 0u32;
+            // Stops as soon as the floor is reached, so the loop is bounded by
+            // the rate itself rather than by the number of elapsed intervals.
+            while applied < count && effective > config.floor_rate_bps {
+                effective = effective * keep_bps / crate::constants::BPS_DENOMINATOR;
+                applied += 1;
+            }
             effective.max(config.floor_rate_bps)
         }
         None => base_rate_bps as i128,
@@ -1734,10 +2082,7 @@ pub fn set_user_milestones(env: &Env, user: &Address, ids: &Vec<u32>) {
 
 pub fn get_latest_achievement_ledger(env: &Env, user: &Address) -> u32 {
     let key = (Symbol::new(env, "lat_mstn"), user.clone());
-    env.storage()
-        .persistent()
-        .get(&key)
-        .unwrap_or(0)
+    env.storage().persistent().get(&key).unwrap_or(0)
 }
 
 pub fn set_latest_achievement_ledger(env: &Env, user: &Address, ledger: u32) {
@@ -2013,7 +2358,9 @@ pub fn get_seasons(env: &Env) -> Vec<Season> {
 }
 
 pub fn set_seasons(env: &Env, seasons: &Vec<Season>) {
-    env.storage().instance().set(&symbol_short!("seasons"), seasons);
+    env.storage()
+        .instance()
+        .set(&symbol_short!("seasons"), seasons);
 }
 
 /// `starts_at` of the season `maybe_emit_season_transition()` last observed
@@ -2061,7 +2408,9 @@ pub fn get_sunset_state(env: &Env) -> SunsetState {
 }
 
 pub fn set_sunset_state(env: &Env, state: SunsetState) {
-    env.storage().instance().set(&symbol_short!("snst_st"), &state);
+    env.storage()
+        .instance()
+        .set(&symbol_short!("snst_st"), &state);
 }
 
 pub fn get_grace_period_end(env: &Env) -> Option<u32> {
@@ -2074,6 +2423,22 @@ pub fn set_grace_period_end(env: &Env, ledger: u32) {
         .set(&symbol_short!("snst_gpe"), &ledger);
 }
 
+/// The ledger by which existing users are asked to have exited a sunsetting
+/// pool, set once by `initiate_sunset` (issue #525). `None` until then, and
+/// never cleared afterwards: the sunset is a one-way action.
+///
+/// Symbol-keyed because `DataKey` is at Soroban's 50-variant cap, the same
+/// reason the #298 sunset accessors above avoid a new variant.
+pub fn get_sunset_exit_deadline(env: &Env) -> Option<u32> {
+    env.storage().instance().get(&symbol_short!("snst_dl"))
+}
+
+pub fn set_sunset_exit_deadline(env: &Env, deadline: u32) {
+    env.storage()
+        .instance()
+        .set(&symbol_short!("snst_dl"), &deadline);
+}
+
 // ── Issue #281: Fee Revenue Sharing ──────────────────────────────────────────
 
 pub fn get_revenue_sharing_config(env: &Env) -> Option<RevenueSharingConfig> {
@@ -2081,7 +2446,9 @@ pub fn get_revenue_sharing_config(env: &Env) -> Option<RevenueSharingConfig> {
 }
 
 pub fn set_revenue_sharing_config(env: &Env, config: &RevenueSharingConfig) {
-    env.storage().instance().set(&symbol_short!("rev_cfg"), config);
+    env.storage()
+        .instance()
+        .set(&symbol_short!("rev_cfg"), config);
 }
 
 pub fn get_revenue_share_pool(env: &Env) -> i128 {
@@ -2092,6 +2459,7 @@ pub fn get_revenue_share_pool(env: &Env) -> i128 {
 }
 
 pub fn set_revenue_share_pool(env: &Env, amount: i128) {
+    assert_non_negative(env, amount);
     env.storage()
         .instance()
         .set(&symbol_short!("rev_pool"), &amount);
@@ -2105,7 +2473,9 @@ pub fn get_revenue_share_epoch(env: &Env) -> u32 {
 }
 
 pub fn set_revenue_share_epoch(env: &Env, epoch: u32) {
-    env.storage().instance().set(&symbol_short!("rev_ep"), &epoch);
+    env.storage()
+        .instance()
+        .set(&symbol_short!("rev_ep"), &epoch);
 }
 
 pub fn get_revenue_share_merkle_root(env: &Env) -> Option<RevenueShareMerkleRoot> {
@@ -2113,7 +2483,9 @@ pub fn get_revenue_share_merkle_root(env: &Env) -> Option<RevenueShareMerkleRoot
 }
 
 pub fn set_revenue_share_merkle_root(env: &Env, root: &RevenueShareMerkleRoot) {
-    env.storage().instance().set(&symbol_short!("rev_mrk"), root);
+    env.storage()
+        .instance()
+        .set(&symbol_short!("rev_mrk"), root);
 }
 
 pub fn is_revenue_share_claimed(env: &Env, user: &Address, epoch: u32) -> bool {
@@ -2147,6 +2519,7 @@ pub fn get_escrow_balance(env: &Env, user: &Address) -> i128 {
 }
 
 pub fn set_escrow_balance(env: &Env, user: &Address, amount: i128) {
+    assert_non_negative(env, amount);
     let key = (Symbol::new(env, "esc_bal"), user.clone());
     env.storage().persistent().set(&key, &amount);
 }
@@ -2244,7 +2617,10 @@ pub fn set_withdrawal_receipt_counter(env: &Env, counter: u64) {
         .set(&Symbol::new(env, "wd_rcpt_n"), &counter);
 }
 
-pub fn get_withdrawal_receipt(env: &Env, receipt_id: u64) -> Option<crate::storage::WithdrawalReceipt> {
+pub fn get_withdrawal_receipt(
+    env: &Env,
+    receipt_id: u64,
+) -> Option<crate::storage::WithdrawalReceipt> {
     let key = (Symbol::new(env, "wd_rcpt"), receipt_id);
     env.storage().persistent().get(&key)
 }
@@ -2312,6 +2688,7 @@ pub fn add_unstake_fee_reserve(env: &Env, amount: i128) {
 }
 
 pub fn set_unstake_fee_reserve(env: &Env, amount: i128) {
+    assert_non_negative(env, amount);
     env.storage()
         .instance()
         .set(&symbol_short!("fbb_rsv"), &amount);
@@ -2329,6 +2706,61 @@ pub fn add_fees_burned(env: &Env, amount: i128) {
     env.storage()
         .instance()
         .set(&symbol_short!("fbb_brn"), &total);
+    // Issue #452: same milestone check as add_tokens_burned but with fees path
+    {
+        let thresholds: soroban_sdk::Vec<i128> = env
+            .storage()
+            .instance()
+            .get(&symbol_short!("burn_thr"))
+            .unwrap_or(soroban_sdk::Vec::new(env));
+        if !thresholds.is_empty() {
+            let total_tokens: i128 = env
+                .storage()
+                .instance()
+                .get(&symbol_short!("tot_burn"))
+                .unwrap_or(0);
+            let total_burned = total.saturating_add(total_tokens);
+            let mut reached: soroban_sdk::Vec<bool> = env
+                .storage()
+                .instance()
+                .get(&symbol_short!("burn_hit"))
+                .unwrap_or(soroban_sdk::Vec::new(env));
+            if reached.len() != thresholds.len() {
+                let mut new_reached = soroban_sdk::Vec::new(env);
+                for _ in 0..thresholds.len() {
+                    new_reached.push_back(false);
+                }
+                let min_len = if reached.len() < thresholds.len() {
+                    reached.len()
+                } else {
+                    thresholds.len()
+                };
+                for i in 0..min_len {
+                    new_reached.set(i, reached.get(i).unwrap());
+                }
+                reached = new_reached;
+            }
+            let ledger = env.ledger().sequence();
+            let mut changed = false;
+            for i in 0..thresholds.len() {
+                let thr = thresholds.get(i).unwrap();
+                let is_reached = reached.get(i).unwrap();
+                if !is_reached && total_burned >= thr {
+                    reached.set(i, true);
+                    changed = true;
+                    env.events().publish(
+                        (symbol_short!("burn_ms"),),
+                        (thr, total_burned, amount, ledger),
+                    );
+                }
+            }
+            if changed {
+                env.storage()
+                    .instance()
+                    .set(&symbol_short!("burn_hit"), &reached);
+            }
+        }
+    }
 }
 
 // ── Issue #309: staker onboarding checklist ──────────────────────────────────
@@ -2373,11 +2805,9 @@ pub fn get_contract_delegate(
     user: &Address,
     contract: &Address,
 ) -> Option<ContractDelegate> {
-    env.storage().persistent().get(&(
-        Symbol::new(env, "ctrdeleg"),
-        user.clone(),
-        contract.clone(),
-    ))
+    env.storage()
+        .persistent()
+        .get(&(Symbol::new(env, "ctrdeleg"), user.clone(), contract.clone()))
 }
 
 pub fn set_contract_delegate(
@@ -2387,11 +2817,7 @@ pub fn set_contract_delegate(
     delegate: &ContractDelegate,
 ) {
     env.storage().persistent().set(
-        &(
-            Symbol::new(env, "ctrdeleg"),
-            user.clone(),
-            contract.clone(),
-        ),
+        &(Symbol::new(env, "ctrdeleg"), user.clone(), contract.clone()),
         delegate,
     );
 }
@@ -2456,9 +2882,7 @@ pub fn clear_position_insured(env: &Env, user: &Address) {
 // ── Matching program (issue #242) ──────────────────────────────────────────
 
 pub fn get_matching_program(env: &Env) -> Option<crate::storage::MatchingProgram> {
-    env.storage()
-        .instance()
-        .get(&symbol_short!("match_pg"))
+    env.storage().instance().get(&symbol_short!("match_pg"))
 }
 
 pub fn set_matching_program(env: &Env, program: &crate::storage::MatchingProgram) {
@@ -2474,7 +2898,11 @@ pub fn get_user_matching_stats(env: &Env, user: &Address) -> crate::storage::Use
         .unwrap_or(crate::storage::UserMatchingStats { total_matched: 0 })
 }
 
-pub fn set_user_matching_stats(env: &Env, user: &Address, stats: &crate::storage::UserMatchingStats) {
+pub fn set_user_matching_stats(
+    env: &Env,
+    user: &Address,
+    stats: &crate::storage::UserMatchingStats,
+) {
     env.storage()
         .persistent()
         .set(&(symbol_short!("match_st"), user.clone()), stats);
@@ -2532,9 +2960,7 @@ pub fn get_cohort_ids(env: &Env) -> Vec<u32> {
 }
 
 pub fn set_cohort_ids(env: &Env, ids: &Vec<u32>) {
-    env.storage()
-        .instance()
-        .set(&symbol_short!("crt_ids"), ids);
+    env.storage().instance().set(&symbol_short!("crt_ids"), ids);
 }
 
 pub fn get_cohort_stats(env: &Env, cohort_id: u32) -> Option<crate::storage::CohortStats> {
@@ -2552,8 +2978,8 @@ pub fn set_cohort_stats(env: &Env, cohort_id: u32, stats: &crate::storage::Cohor
 // ── Staked at ledger (direct access) ───────────────────────────────────────
 
 pub fn set_staked_at_ledger(env: &Env, user: &Address, ledger: u32) {
-    env.storage()
-        .instance()
-        .set(&crate::storage::DataKey::StakedAtLedger(user.clone()), &ledger);
+    env.storage().instance().set(
+        &crate::storage::DataKey::StakedAtLedger(user.clone()),
+        &ledger,
+    );
 }
-

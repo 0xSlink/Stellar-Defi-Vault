@@ -15,10 +15,13 @@ use crate::admin;
 use crate::balance;
 use crate::errors::VaultError;
 use crate::stake_quota;
-use crate::vault::VaultContract;
+use crate::VaultContract;
+use crate::vault::VaultContractClient;
 
 /// Maximum number of open (not-yet-closed) content items.
 pub const MAX_OPEN_ITEMS: u32 = 100;
+/// Maximum legacy text content-hash identifier length, in bytes.
+pub const MAX_CONTENT_HASH_LEN_BYTES: u32 = 64;
 
 /// Instance-storage key for the full content items list.
 const ITEMS_KEY: Symbol = symbol_short!("cc_items");
@@ -91,12 +94,13 @@ fn get_position_amount(env: &Env, user: &Address) -> Option<i128> {
     balance::shares_to_amount(total_shares, total_deposited, shares)
 }
 
-#[contractimpl]
+#[cfg_attr(not(feature = "testutils"), contractimpl)]
 impl VaultContract {
-    /// Submit a new content item for curation voting.
+    /// Submit a new content item for curation voting; `content_hash` is limited
+    /// to `MAX_CONTENT_HASH_LEN_BYTES` bytes (excess returns `DescriptionTooLong`).
     ///
     /// Any staker with an active position can submit. The content is
-    /// identified by its hash — the contract never stores actual content.
+    /// identified by its hash â€” the contract never stores actual content.
     /// Reverts if 100 open items already exist.
     pub fn submit_content(
         env: Env,
@@ -104,6 +108,9 @@ impl VaultContract {
         content_hash: String,
     ) -> Result<(), VaultError> {
         user.require_auth();
+        if content_hash.len() > MAX_CONTENT_HASH_LEN_BYTES {
+            return Err(VaultError::DescriptionTooLong);
+        }
 
         // Caller must have an active staking position.
         if balance::get_shares(&env, &user) == 0 {
@@ -148,10 +155,12 @@ impl VaultContract {
         Ok(())
     }
 
-    /// Vote on a content item. Vote weight equals the voter's staked amount.
+    /// Vote on a content item. `content_hash` is limited to
+    /// `MAX_CONTENT_HASH_LEN_BYTES` bytes (excess returns `DescriptionTooLong`).
+    /// Vote weight equals the voter's staked amount.
     ///
     /// `approve = true` counts toward acceptance; `false` counts toward
-    /// rejection. One vote per address per content item — double voting is
+    /// rejection. One vote per address per content item â€” double voting is
     /// rejected (overwrite not allowed).
     pub fn vote_on_content(
         env: Env,
@@ -160,6 +169,9 @@ impl VaultContract {
         approve: bool,
     ) -> Result<(), VaultError> {
         user.require_auth();
+        if content_hash.len() > MAX_CONTENT_HASH_LEN_BYTES {
+            return Err(VaultError::DescriptionTooLong);
+        }
 
         // Must have an active position whose amount becomes vote weight.
         let weight = get_position_amount(&env, &user).ok_or(VaultError::PositionNotFound)?;
@@ -209,7 +221,8 @@ impl VaultContract {
         Ok(())
     }
 
-    /// Close voting on a content item. Admin only.
+    /// Close voting on a content item. Admin only; `content_hash` is limited
+    /// to `MAX_CONTENT_HASH_LEN_BYTES` bytes (excess returns `DescriptionTooLong`).
     ///
     /// Emits `content_approved` event when `votes_for > votes_against`.
     pub fn close_content_vote(
@@ -217,6 +230,9 @@ impl VaultContract {
         content_hash: String,
     ) -> Result<(), VaultError> {
         admin::require_admin(&env)?;
+        if content_hash.len() > MAX_CONTENT_HASH_LEN_BYTES {
+            return Err(VaultError::DescriptionTooLong);
+        }
 
         let mut items = get_items(&env);
         let mut found = false;
@@ -231,8 +247,9 @@ impl VaultContract {
                 items.set(i, updated.clone());
 
                 if updated.votes_for > updated.votes_against {
+                    let admin = admin::get_admin(&env)?;
                     env.events().publish(
-                        (symbol_short!("cc_apprv"),),
+                        (symbol_short!("cc_apprv"), admin),
                         (
                             content_hash.clone(),
                             updated.votes_for,
@@ -253,8 +270,10 @@ impl VaultContract {
         Ok(())
     }
 
-    /// Read-only query: return a single content item by hash, or `None`.
+    /// Read-only query by `content_hash` (maximum `MAX_CONTENT_HASH_LEN_BYTES` bytes);
+    /// overlong values return `None`.
     pub fn get_content_item(env: Env, content_hash: String) -> Option<ContentItem> {
+        if content_hash.len() > MAX_CONTENT_HASH_LEN_BYTES { return None; }
         get_item(&env, &content_hash)
     }
 
@@ -263,3 +282,18 @@ impl VaultContract {
         get_items(&env)
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

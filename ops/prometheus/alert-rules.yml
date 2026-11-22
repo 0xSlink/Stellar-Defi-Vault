@@ -1,0 +1,29 @@
+groups:
+  - name: vault-alerts
+    rules:
+      - alert: VaultLowRunway
+        expr: vault_runway_ledgers < 10000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Vault reward runway low"
+          description: "Reward balance runway is below 10,000 ledgers."
+
+      - alert: VaultPaused
+        expr: vault_paused == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Vault is paused"
+          description: "Vault deposit/claim activity is currently paused."
+
+      - alert: VaultSharePriceJump
+        expr: abs(rate(vault_share_price[10m])) > 0.10
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Vault share price anomaly"
+          description: "Share price changed by more than 10% within 10 minutes."

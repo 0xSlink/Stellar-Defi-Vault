@@ -6,13 +6,13 @@
 //! that interval is.
 //!
 //! Optimal interval = `sqrt(2 * tx_cost / (rate * position))`, adapted to
-//! integer ledgers — the classic EOQ-style tradeoff between "claim often,
+//! integer ledgers â€” the classic EOQ-style tradeoff between "claim often,
 //! pay tx cost every time" and "claim rarely, leave more rewards uncompounded
 //! for longer".
 //!
 //! # Wiring
 //!
-//! `trigger_optimized_compound` is specified to "claim and restake" — this
+//! `trigger_optimized_compound` is specified to "claim and restake" â€” this
 //! crate has no live `claim`/`stake`/`restake` entrypoint to call yet (see
 //! this PR's description). The function here does everything up to that
 //! point (auth, interval-elapsed gate, interval recalculation, event, and
@@ -29,14 +29,15 @@ use soroban_sdk::{contractimpl, contracttype, symbol_short, Address, Env, Symbol
 
 use crate::balance;
 use crate::errors::VaultError;
-use crate::vault::{VaultContract, VaultContractClient};
+use crate::VaultContract;
+use crate::vault::VaultContractClient;
 
 /// Persistent-storage key prefix for a user's optimizer config.
 const CONFIG_KEY: Symbol = symbol_short!("cmp_opt");
 
 /// Keeper incentive: 0.25% of the claimed amount, per the issue.
 const KEEPER_INCENTIVE_BPS: i128 = 25;
-const BPS_DENOMINATOR: i128 = 10_000;
+const BPS_DENOMINATOR: i128 = crate::constants::BPS_DENOMINATOR;
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -83,7 +84,7 @@ fn isqrt(n: u128) -> u128 {
 /// amount, so it scales with position size automatically rather than one
 /// user's estimate going stale as they add/remove stake.
 ///
-/// Returns a floor of `1` ledger rather than `0` — an interval of zero would
+/// Returns a floor of `1` ledger rather than `0` â€” an interval of zero would
 /// mean "compound every ledger," which is never actually optimal once any
 /// tx cost is nonzero, and would make `trigger_optimized_compound`'s
 /// elapsed-check trivially always-true.
@@ -100,7 +101,7 @@ fn compute_optimal_interval(
     // unit system, so they cancel cleanly: interval ~ sqrt(2 * tx_cost_bps / rate_bps).
     // Scaled by STELLAR_LEDGERS_PER_YEAR so the result lands in ledger units
     // rather than a fraction-of-a-year float this no_std contract can't hold.
-    const LEDGERS_PER_YEAR: u128 = 6_307_200;
+    const LEDGERS_PER_YEAR: u128 = crate::constants::STELLAR_LEDGERS_PER_YEAR as u128;
 
     let numerator = 2u128
         .saturating_mul(tx_cost_bps as u128)
@@ -114,7 +115,7 @@ fn compute_optimal_interval(
     (interval as u32).max(1)
 }
 
-#[contractimpl]
+#[cfg_attr(not(feature = "testutils"), contractimpl)]
 impl VaultContract {
     /// Opt in to the compound optimizer with an estimated tx cost, in basis
     /// points of position size.
@@ -237,3 +238,18 @@ impl VaultContract {
         crate::compound_optimizer::get_config(&env, &user)
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

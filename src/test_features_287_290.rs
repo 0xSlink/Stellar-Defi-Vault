@@ -73,7 +73,7 @@ fn no_rewards_accrue_before_the_cliff() {
     let (env, client, _admin, user) = setup();
 
     client.set_vesting_cliff(&10_000);
-    client.stake(&user, &1_000);
+    client.stake(&user, &1_000, &0);
 
     // Part-way to the cliff: still nothing.
     set_ledger(&env, 6_000);
@@ -85,18 +85,28 @@ fn rewards_unlock_retroactively_at_the_cliff() {
     let (env, client, _admin, user) = setup();
 
     client.set_vesting_cliff(&1_000);
-    client.stake(&user, &1_000);
+    client.stake(&user, &1_000, &0);
 
     let before = client.calc_pending_reward(&user);
     assert_eq!(before, 0, "inside the cliff nothing should be pending");
 
-    // Cross the cliff. Accrual runs from staked_at_ledger, not from the cliff
-    // date, so the first post-cliff read pays for the whole elapsed period.
+    // One ledger before the cliff is still locked.
+    set_ledger(&env, 1_000 + 1_000 - 1);
+    assert!(!client.is_past_cliff(&user));
+    assert_eq!(client.calc_pending_reward(&user), 0);
+
+    // The cliff is inclusive. Accrual runs from staked_at_ledger, not from
+    // the cliff date, so the first read at the boundary unlocks retroactively.
+    set_ledger(&env, 1_000 + 1_000);
+    assert!(client.is_past_cliff(&user));
+    let at_boundary = client.calc_pending_reward(&user);
+    assert!(at_boundary >= before);
+
     set_ledger(&env, 1_000 + 1_001);
     let after = client.calc_pending_reward(&user);
 
     assert!(
-        after >= before,
+        after >= at_boundary && at_boundary >= before,
         "crossing the cliff must not reduce the pending balance"
     );
 }
@@ -106,7 +116,7 @@ fn a_zero_cliff_disables_the_gate() {
     let (env, client, _admin, user) = setup();
 
     client.set_vesting_cliff(&0);
-    client.stake(&user, &1_000);
+    client.stake(&user, &1_000, &0);
     set_ledger(&env, 2_000);
 
     assert!(client.is_past_cliff(&user));
@@ -119,7 +129,7 @@ fn cliff_unlock_ledger_is_stake_plus_cliff() {
     let (_env, client, _admin, user) = setup();
 
     client.set_vesting_cliff(&2_500);
-    client.stake(&user, &1_000);
+    client.stake(&user, &1_000, &0);
 
     assert_eq!(client.cliff_unlock_ledger(&user), 1_000 + 2_500);
     assert!(!client.is_past_cliff(&user));
@@ -130,14 +140,14 @@ fn restaking_resets_the_cliff() {
     let (env, client, _admin, user) = setup();
 
     client.set_vesting_cliff(&1_000);
-    client.stake(&user, &1_000);
+    client.stake(&user, &1_000, &0);
 
     set_ledger(&env, 2_500);
     assert!(client.is_past_cliff(&user));
 
     // A fresh stake moves staked_at_ledger forward, so the position re-enters
     // its cliff rather than keeping the old unlock.
-    client.stake(&user, &1_000);
+    client.stake(&user, &1_000, &0);
     assert!(!client.is_past_cliff(&user));
     assert_eq!(client.cliff_unlock_ledger(&user), 2_500 + 1_000);
 }
@@ -446,7 +456,7 @@ fn withdrawal_is_blocked_after_insolvency_even_past_the_period() {
 fn a_published_price_sums_principal_and_pending_reward() {
     let (_env, client, _admin, user) = setup();
 
-    client.stake(&user, &10_000);
+    client.stake(&user, &10_000, &0);
 
     let price = client.publish_position_price(&user);
     assert_eq!(price.user, user);
@@ -458,7 +468,7 @@ fn a_published_price_sums_principal_and_pending_reward() {
 fn the_latest_price_is_the_most_recent_one() {
     let (env, client, _admin, user) = setup();
 
-    client.stake(&user, &10_000);
+    client.stake(&user, &10_000, &0);
     client.publish_position_price(&user);
 
     set_ledger(&env, 2_000);
@@ -479,7 +489,7 @@ fn there_is_no_price_before_one_is_published() {
 fn history_grows_to_the_cap_then_rolls() {
     let (env, client, _admin, user) = setup();
 
-    client.stake(&user, &10_000);
+    client.stake(&user, &10_000, &0);
 
     // Publish two past the cap.
     for i in 0..(MAX_PRICE_HISTORY + 2) {
@@ -504,7 +514,7 @@ fn bulk_publish_prices_covers_every_supplied_user() {
     let _ = admin;
 
     let second = Address::generate(&env);
-    client.stake(&user, &10_000);
+    client.stake(&user, &10_000, &0);
 
     let mut users = Vec::new(&env);
     users.push_back(user.clone());
@@ -536,7 +546,7 @@ fn a_position_inside_its_cliff_prices_at_principal_only() {
     let (_env, client, _admin, user) = setup();
 
     client.set_vesting_cliff(&10_000);
-    client.stake(&user, &10_000);
+    client.stake(&user, &10_000, &0);
 
     // Advertising rewards that are not yet payable would misprice the
     // position for anyone quoting against this feed.

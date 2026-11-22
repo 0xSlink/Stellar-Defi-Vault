@@ -1,21 +1,4 @@
-//! Epoch reward outflow cap.
-//!
-//! Caps total reward token outflow within a single epoch window so a
-//! coordinated mass-claim event cannot drain the reward pool unexpectedly
-//! fast. Any amount that would push the epoch over its cap is queued as a
-//! `DeferredReward` for the caller and becomes payable once the epoch window
-//! rolls over.
-//!
-//! # Wiring
-//!
-//! Like `compound_optimizer.rs`, this module exposes its own capped claim
-//! entrypoint (`claim_epoch_capped_reward`) rather than editing the existing
-//! `claim()` flow in `vault.rs`, keeping the cap opt-in and additive.
-//!
-//! # Storage
-//!
-//! `DataKey` sits at Soroban's 50-variant cap, so this uses raw `Symbol`-keyed
-//! storage, matching `balance.rs`.
+﻿
 
 use soroban_sdk::{contractimpl, contracttype, symbol_short, Address, Env, Symbol};
 
@@ -23,7 +6,8 @@ use crate::admin;
 use crate::balance;
 use crate::errors::VaultError;
 use crate::events;
-use crate::vault::{VaultContract, VaultContractClient};
+use crate::VaultContract;
+use crate::vault::VaultContractClient;
 
 const CAP_CONFIG_KEY: Symbol = symbol_short!("epc_cap");
 const TRACKER_KEY: Symbol = symbol_short!("epc_trk");
@@ -84,6 +68,28 @@ fn remove_deferred(env: &Env, user: &Address) {
         .remove(&(DEFERRED_KEY, user.clone()));
 }
 
+/// Add `amount` to `user`'s deferred-reward bucket, claimable via
+/// `claim_deferred_reward` once `next_epoch_start` is reached. Shared by any
+/// claim path that needs to queue an overflow amount rather than lose it â€”
+/// currently this module's own `claim_epoch_capped_reward` and
+/// `minimum_reserve_ratio.rs`'s `claim_with_reserve_floor` (issue #405),
+/// which reuses this same bucket per that issue's own notes.
+pub(crate) fn queue_deferred(env: &Env, user: &Address, amount: i128, next_epoch_start: u32) {
+    if amount <= 0 {
+        return;
+    }
+    let existing = get_deferred(env, user).map(|d| d.amount).unwrap_or(0);
+    set_deferred(
+        env,
+        user,
+        &DeferredReward {
+            amount: existing.saturating_add(amount),
+            next_epoch_start,
+        },
+    );
+    events::reward_deferred(env, user, amount, next_epoch_start);
+}
+
 /// The current tracker, rolling over to a fresh epoch window if the
 /// configured `epoch_ledgers` window has elapsed since `epoch_start`.
 fn current_tracker(env: &Env, config: &EpochRewardCapConfig) -> EpochRewardTracker {
@@ -97,7 +103,7 @@ fn current_tracker(env: &Env, config: &EpochRewardCapConfig) -> EpochRewardTrack
     }
 }
 
-#[contractimpl]
+#[cfg_attr(not(feature = "testutils"), contractimpl)]
 impl VaultContract {
     /// Configure the per-epoch reward outflow cap. Admin only. Starts a fresh
     /// tracking window from the current ledger.
@@ -212,18 +218,7 @@ impl VaultContract {
 
         if deferred_amount > 0 {
             let next_epoch_start = tracker.epoch_start.saturating_add(config.epoch_ledgers);
-            let existing = crate::epoch_reward_cap::get_deferred(&env, &user)
-                .map(|d| d.amount)
-                .unwrap_or(0);
-            crate::epoch_reward_cap::set_deferred(
-                &env,
-                &user,
-                &DeferredReward {
-                    amount: existing.saturating_add(deferred_amount),
-                    next_epoch_start,
-                },
-            );
-            events::reward_deferred(&env, &user, deferred_amount, next_epoch_start);
+            crate::epoch_reward_cap::queue_deferred(&env, &user, deferred_amount, next_epoch_start);
         }
 
         Ok(payable)
@@ -262,3 +257,18 @@ impl VaultContract {
         Ok(deferred.amount)
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

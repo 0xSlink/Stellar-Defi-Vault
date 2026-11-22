@@ -1,4 +1,4 @@
-//! Cross-pool liquidity bridge.
+﻿//! Cross-pool liquidity bridge.
 //!
 //! Distinct from the pool-to-pool migration flow used to sunset a deprecated
 //! pool: this lets a user move a portion of their stake from this pool into
@@ -16,7 +16,8 @@ use soroban_sdk::{contractimpl, symbol_short, token, Address, Env, Symbol, Vec};
 use crate::admin;
 use crate::balance;
 use crate::errors::VaultError;
-use crate::vault::{VaultContract, VaultContractClient};
+use crate::VaultContract;
+use crate::vault::VaultContractClient;
 
 const APPROVED_TARGETS_KEY: Symbol = symbol_short!("brdg_tgt");
 
@@ -27,7 +28,7 @@ fn approved_targets(env: &Env) -> Vec<Address> {
         .unwrap_or(Vec::new(env))
 }
 
-#[contractimpl]
+#[cfg_attr(not(feature = "testutils"), contractimpl)]
 impl VaultContract {
     /// Whitelists `target_pool` as a valid destination for
     /// `cross_pool_liquidity_bridge()`. Admin only.
@@ -139,7 +140,7 @@ impl VaultContract {
         );
 
         let target_client = VaultContractClient::new(&env, &target_pool);
-        target_client.stake(&user, &token_amount);
+        target_client.stake(&user, &token_amount, &0);
 
         env.events().publish(
             (symbol_short!("brdg_mv"), user),
@@ -148,3 +149,18 @@ impl VaultContract {
         Ok(token_amount)
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

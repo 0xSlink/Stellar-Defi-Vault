@@ -47,25 +47,51 @@ The compiled `.wasm` file will be at `target/wasm32-unknown-unknown/release/stel
 ## How to Contribute (Wave Program)
 
 1. Browse open issues tagged **`Stellar Wave`** at [drips.network/wave/stellar](https://www.drips.network/wave/stellar/issues).
-2. Apply for an issue through the Drips Wave app.
-3. Wait to be **assigned** before starting work — do not open a PR before assignment.
-4. Fork the repo, create a branch named `fix/<issue-number>-short-description` or `feat/<issue-number>-short-description`.
-5. Open a PR with `Closes #<issue-number>` in the description so the Drips bot can track it.
-6. Respond promptly to review feedback — the Wave window is short.
+2. For newcomer-friendly tasks, start with the curated [`good first issue` list](https://github.com/Rickyy1017/Stellar-Defi-Vault/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
+3. Apply for an issue through the Drips Wave app.
+4. Wait to be **assigned** before starting work — do not open a PR before assignment.
+5. Fork the repo, create a branch named `fix/<issue-number>-short-description` or `feat/<issue-number>-short-description`.
+6. Open a PR with `Closes #<issue-number>` in the description so the Drips bot can track it.
+7. Respond promptly to review feedback — the Wave window is short.
 
 ## Code Style
 
 - Run `cargo fmt` before committing.
-- Ensure `cargo clippy --features testutils` passes with no warnings.
+- Ensure `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` pass.
+- Pull requests must keep the formatting and clippy CI checks green; these checks
+  run automatically on every pull request.
 - All new functionality must include unit tests.
 - Public functions must have doc comments (`///`).
+- Keep the README's **Trust Assumptions and Admin Powers** section and
+  `docs/SECURITY.md` synchronized whenever an admin-gated function, role, or
+  admin-controlled parameter is added or changed.
+- When introducing or altering public contract functions, add the signature to `VaultTrait` (`src/interface.rs`) first before implementing it on `VaultContract`.
+- Update `COSTS.md` with benchmarked CPU instructions and memory consumption for any new public functions.
 - Keep `CONTRACT_VERSION` in sync with `Cargo.toml` when updating the contract version.
+
+## Test Snapshots
+
+Soroban writes JSON snapshot files to `test_snapshots/` when tests run. This
+directory is listed in `.gitignore` and **must never be committed**. See
+[`docs/TEST_SNAPSHOTS.md`](docs/TEST_SNAPSHOTS.md) for the full policy and
+CI enforcement details.
+
+If you accidentally stage snapshot files, remove them with:
+
+```bash
+git rm -r --cached test_snapshots/
+```
 
 ## PR Checklist
 
+Opening a pull request pre-fills
+[`.github/pull_request_template.md`](.github/pull_request_template.md), which
+covers the full checklist (tests, events, docs, lint), a storage-layout
+declaration, and a section for any deferred work. The essentials:
+
 - [ ] Tests pass (`cargo test --features testutils`)
 - [ ] `cargo fmt --check` passes
-- [ ] `cargo clippy` passes with no warnings
+- [ ] `cargo clippy --all-targets -- -D warnings` passes with no warnings
 - [ ] New logic is covered by tests
 - [ ] PR description references the issue (`Closes #N`)
 

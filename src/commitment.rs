@@ -1,4 +1,4 @@
-//! Commit–reveal stake commitments (issue #288).
+//! Commitâ€“reveal stake commitments (issue #288).
 //!
 //! Lets a staker commit to an amount without revealing it, then reveal and
 //! stake later. A large stake intention is no longer telegraphed in the
@@ -25,21 +25,26 @@ use soroban_sdk::{contractimpl, contracttype, symbol_short, Address, Bytes, Env,
 
 use crate::admin;
 use crate::errors::VaultError;
-use crate::vault::{VaultContract, VaultContractClient};
+use crate::VaultContract;
+use crate::vault::VaultContractClient;
 
 /// Default window, in ledgers, within which a commitment must be revealed.
 ///
 /// Roughly a day at ~5s ledgers. Long enough to survive a stuck transaction,
 /// short enough that an abandoned commitment does not lock the slot for long.
-pub const DEFAULT_COMMITMENT_WINDOW: u32 = 17_280;
+pub const DEFAULT_COMMITMENT_WINDOW: u32 = crate::constants::LEDGERS_PER_DAY;
 
 /// Instance-storage key for the configured reveal window.
 const WINDOW_KEY: Symbol = symbol_short!("cmt_wnd");
 
 /// Persistent-storage key prefix for a user's outstanding commitment.
 const COMMITMENT_KEY: Symbol = symbol_short!("cmt_rec");
+/// Exact SHA-256 commitment digest size, in bytes.
+pub const COMMITMENT_HASH_LEN: u32 = 32;
+/// Maximum reveal salt length, in bytes.
+pub const MAX_COMMITMENT_SALT_LEN: u32 = 64;
 
-/// An outstanding commit–reveal record.
+/// An outstanding commitâ€“reveal record.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct CommitmentRecord {
@@ -92,7 +97,7 @@ pub fn compute_hash(env: &Env, amount: i128, salt: &Bytes) -> Bytes {
     env.crypto().sha256(&preimage(env, amount, salt)).into()
 }
 
-#[contractimpl]
+#[cfg_attr(not(feature = "testutils"), contractimpl)]
 impl VaultContract {
     /// Set the reveal window, in ledgers. Admin only.
     pub fn set_commitment_window(env: Env, ledgers: u32) -> Result<(), VaultError> {
@@ -124,7 +129,7 @@ impl VaultContract {
     /// One commitment per user at a time: while an unrevealed, unexpired
     /// commitment stands, a second call is rejected. Allowing several would let
     /// a committer prepare a range of amounts and reveal whichever suits them
-    /// once the market moved — exactly the optionality commit–reveal exists to
+    /// once the market moved â€” exactly the optionality commitâ€“reveal exists to
     /// remove.
     pub fn commit_to_stake(
         env: Env,
@@ -133,11 +138,11 @@ impl VaultContract {
     ) -> Result<(), VaultError> {
         user.require_auth();
 
-        if commitment_hash.len() != 32 {
+        if commitment_hash.len() != COMMITMENT_HASH_LEN {
             // A SHA-256 digest is 32 bytes; anything else can never match a
             // reveal, so reject it now rather than locking the slot with a
             // commitment that is impossible to satisfy.
-            return Err(VaultError::InvalidAddress);
+            return Err(VaultError::InvalidHashLength);
         }
 
         if let Some(existing) = commitment_for(&env, &user) {
@@ -166,12 +171,12 @@ impl VaultContract {
         commitment_for(&env, &user)
     }
 
-    /// Reveal a commitment and stake the committed amount.
+    /// Reveal a commitment with `salt` limited to `MAX_COMMITMENT_SALT_LEN` bytes.
     ///
     /// Verifies `hash == SHA256(amount || salt)` before staking. On success the
     /// commitment is consumed, so the same reveal cannot be replayed.
     ///
-    /// Note this does **not** perform the stake itself — it validates and
+    /// Note this does **not** perform the stake itself â€” it validates and
     /// clears the commitment, then defers to the contract's own `stake`
     /// entrypoint so that every staking rule (minimum, pause, whitelist,
     /// position cap) applies exactly as it does to a direct stake. Duplicating
@@ -183,6 +188,7 @@ impl VaultContract {
         salt: Bytes,
     ) -> Result<(), VaultError> {
         user.require_auth();
+        if salt.len() > MAX_COMMITMENT_SALT_LEN { return Err(VaultError::MessageTooLong); }
 
         let record = commitment_for(&env, &user).ok_or(VaultError::NotInitialized)?;
 
@@ -217,3 +223,18 @@ impl VaultContract {
         Self::stake(env, user, amount).map(|_shares| ())
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

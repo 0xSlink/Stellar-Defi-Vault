@@ -15,7 +15,8 @@ use soroban_sdk::{contractimpl, contracttype, symbol_short, Address, Env, Symbol
 use crate::admin;
 use crate::errors::VaultError;
 use crate::storage::DataKey;
-use crate::vault::VaultContract;
+use crate::VaultContract;
+use crate::vault::VaultContractClient;
 
 const CONFIG_KEY: Symbol = symbol_short!("lockxcfg");
 /// Per-user cumulative extra ledgers committed via `extend_lock_period()`.
@@ -35,7 +36,7 @@ fn get_config(env: &Env) -> Option<LockExtensionConfig> {
     env.storage().instance().get(&CONFIG_KEY)
 }
 
-#[contractimpl]
+#[cfg_attr(not(feature = "testutils"), contractimpl)]
 impl VaultContract {
     /// Sets the lock-extension boost terms. Admin only.
     pub fn set_lock_extension_config(
@@ -104,7 +105,7 @@ impl VaultContract {
 
         let boost_gained = (additional_ledgers as u64)
             .checked_mul(config.boost_per_10k_ledgers_bps as u64)
-            .and_then(|v| v.checked_div(10_000))
+            .and_then(|v| v.checked_div(crate::constants::BPS_DENOMINATOR))
             .ok_or(VaultError::ArithmeticError)? as u32;
 
         let boost_key = (BOOST_KEY, user.clone());
@@ -128,3 +129,18 @@ impl VaultContract {
             .unwrap_or(0)
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

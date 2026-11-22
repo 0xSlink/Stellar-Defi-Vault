@@ -1,4 +1,4 @@
-//! Keeper registry.
+﻿//! Keeper registry.
 //!
 //! Several keeper-triggered flows (e.g. `compound_optimizer.rs`'s
 //! `trigger_optimized_compound`) rely on an arbitrary caller-supplied
@@ -18,7 +18,8 @@ use soroban_sdk::{contractimpl, contracttype, symbol_short, Address, Env, Symbol
 use crate::admin;
 use crate::errors::VaultError;
 use crate::events;
-use crate::vault::{VaultContract, VaultContractClient};
+use crate::VaultContract;
+use crate::vault::VaultContractClient;
 
 /// Persistent-storage key prefix for a single keeper's record.
 const KEEPER_KEY: Symbol = symbol_short!("kpr_rec");
@@ -147,3 +148,18 @@ impl VaultContract {
         Ok(records)
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

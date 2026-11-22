@@ -1,4 +1,4 @@
-//! Validator node reward integration.
+﻿//! Validator node reward integration.
 //!
 //! Links a Stellar validator node to the pool. Validator rewards earned by the
 //! node are deposited into a separate balance and distributed proportionally
@@ -16,7 +16,8 @@ use soroban_sdk::{contractimpl, symbol_short, Address, Env, Symbol, Vec};
 use crate::admin;
 use crate::balance;
 use crate::errors::VaultError;
-use crate::vault::{VaultContract, VaultContractClient};
+use crate::VaultContract;
+use crate::vault::VaultContractClient;
 
 /// Instance-storage key for the linked validator node address.
 const VALIDATOR_KEY: Symbol = symbol_short!("vr_node");
@@ -28,7 +29,7 @@ const VR_POOL_KEY: Symbol = symbol_short!("vr_pool");
 /// Keyed by `(VR_BAL_KEY, user)`.
 const VR_BAL_KEY: Symbol = symbol_short!("vr_bal");
 
-// ── storage helpers ──────────────────────────────────────────────────────────
+// â”€â”€ storage helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 fn get_validator_node(env: &Env) -> Option<Address> {
     env.storage().instance().get(&VALIDATOR_KEY)
@@ -62,17 +63,21 @@ fn set_vr_balance(env: &Env, user: &Address, amount: i128) {
         .set(&(VR_BAL_KEY, user.clone()), &amount);
 }
 
-#[contractimpl]
+#[cfg_attr(not(feature = "testutils"), contractimpl)]
 impl VaultContract {
     /// Link a validator node address to the pool. Admin only.
     ///
     /// Only the registered node may call `deposit_validator_rewards`.
     pub fn set_validator_node(env: Env, node_address: Address) -> Result<(), VaultError> {
         admin::require_admin(&env)?;
+        if node_address == env.current_contract_address() {
+            return Err(VaultError::InvalidAddress);
+        }
         set_validator_node(&env, &node_address);
 
+        let admin = admin::get_admin(&env)?;
         env.events().publish(
-            (symbol_short!("vr_set"),),
+            (symbol_short!("vr_set"), admin),
             (node_address, env.ledger().sequence()),
         );
         Ok(())
@@ -173,8 +178,9 @@ impl VaultContract {
         // Zero the pool. Any rounding dust stays in the contract.
         set_vr_pool(&env, 0);
 
+        let admin = admin::get_admin(&env)?;
         env.events().publish(
-            (symbol_short!("vr_dist"),),
+            (symbol_short!("vr_dist"), admin),
             (distributed, staker_count, env.ledger().sequence()),
         );
         Ok(())
@@ -221,3 +227,18 @@ impl VaultContract {
         get_vr_pool(&env)
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
