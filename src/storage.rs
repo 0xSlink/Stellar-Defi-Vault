@@ -216,79 +216,20 @@ pub enum DataKey {
     EpochLedgers,
     EpochRewardPerEpoch,
     EpochRewardFactor(u32),
-    // NOTE: DataKey is at Soroban's 50-variant cap. New keys should be
-    // added to the appropriate domain sub-enum (AdminKey, PositionKey,
-    // RewardKey, GovernanceKey) wrapped by StorageKey (issue #646).
-}
-
-impl DataKey {
-    /// Maps a legacy DataKey variant to its namespaced domain sub-enum within StorageKey (Issue #646).
-    pub fn to_storage_key(&self) -> StorageKey {
-        match self {
-            DataKey::Admin => StorageKey::Admin(AdminKey::Admin),
-            DataKey::Token => StorageKey::Admin(AdminKey::Token),
-            DataKey::TotalShares => StorageKey::Admin(AdminKey::TotalShares),
-            DataKey::TotalDeposited => StorageKey::Admin(AdminKey::TotalDeposited),
-            DataKey::MinStake => StorageKey::Admin(AdminKey::MinStake),
-            DataKey::Paused => StorageKey::Admin(AdminKey::Paused),
-            DataKey::WithdrawalLimit => StorageKey::Admin(AdminKey::WithdrawalLimit),
-            DataKey::LockPeriod => StorageKey::Admin(AdminKey::LockPeriod),
-            DataKey::EarlyExitPenaltyBps => StorageKey::Admin(AdminKey::EarlyExitPenaltyBps),
-            DataKey::TotalStakers => StorageKey::Admin(AdminKey::TotalStakers),
-            DataKey::CooldownPeriod => StorageKey::Admin(AdminKey::CooldownPeriod),
-            DataKey::UnstakeFeeBps => StorageKey::Admin(AdminKey::UnstakeFeeBps),
-
-            DataKey::ShareBalance(addr) => StorageKey::Position(PositionKey::ShareBalance(addr.clone())),
-            DataKey::StakeHistory(addr) => StorageKey::Position(PositionKey::StakeHistory(addr.clone())),
-            DataKey::RewardCheckpointLedger(addr) => StorageKey::Position(PositionKey::RewardCheckpointLedger(addr.clone())),
-            DataKey::LastClaimLedger(addr) => StorageKey::Position(PositionKey::LastClaimLedger(addr.clone())),
-            DataKey::AccruedReward(addr) => StorageKey::Position(PositionKey::AccruedReward(addr.clone())),
-            DataKey::StakedAtLedger(addr) => StorageKey::Position(PositionKey::StakedAtLedger(addr.clone())),
-            DataKey::LastUnstakeLedger(addr) => StorageKey::Position(PositionKey::LastUnstakeLedger(addr.clone())),
-            DataKey::Restaked(addr) => StorageKey::Position(PositionKey::Restaked(addr.clone())),
-            DataKey::Delegate(addr) => StorageKey::Position(PositionKey::Delegate(addr.clone())),
-            DataKey::UnbondingPosition(addr) => StorageKey::Position(PositionKey::UnbondingPosition(addr.clone())),
-            DataKey::RewardRemainder(addr) => StorageKey::Position(PositionKey::RewardRemainder(addr.clone())),
-            DataKey::UserClaimWindow(addr) => StorageKey::Position(PositionKey::UserClaimWindow(addr.clone())),
-            DataKey::FrozenAt(addr) => StorageKey::Position(PositionKey::FrozenAt(addr.clone())),
-            DataKey::FirstStakedAt(addr) => StorageKey::Position(PositionKey::FirstStakedAt(addr.clone())),
-            DataKey::VestingEntries(addr) => StorageKey::Position(PositionKey::VestingEntries(addr.clone())),
-
-            DataKey::RewardRateBps => StorageKey::Reward(RewardKey::RewardRateBps),
-            DataKey::RewardPoolBalance => StorageKey::Reward(RewardKey::RewardPoolBalance),
-            DataKey::TotalRewardsPaid => StorageKey::Reward(RewardKey::TotalRewardsPaid),
-            DataKey::TotalEverClaimed => StorageKey::Reward(RewardKey::TotalEverClaimed),
-            DataKey::RateHistory => StorageKey::Reward(RewardKey::RateHistory),
-            DataKey::BoostSchedule => StorageKey::Reward(RewardKey::BoostSchedule),
-            DataKey::BoostCampaign => StorageKey::Reward(RewardKey::BoostCampaign),
-            DataKey::VestingPeriod => StorageKey::Reward(RewardKey::VestingPeriod),
-            DataKey::EpochMode => StorageKey::Reward(RewardKey::EpochMode),
-            DataKey::CurrentEpoch => StorageKey::Reward(RewardKey::CurrentEpoch),
-            DataKey::EpochLedgers => StorageKey::Reward(RewardKey::EpochLedgers),
-            DataKey::EpochRewardPerEpoch => StorageKey::Reward(RewardKey::EpochRewardPerEpoch),
-            DataKey::EpochRewardFactor(f) => StorageKey::Reward(RewardKey::EpochRewardFactor(*f)),
-
-            DataKey::WhitelistEnabled => StorageKey::Governance(GovernanceKey::WhitelistEnabled),
-            DataKey::Whitelisted(addr) => StorageKey::Governance(GovernanceKey::Whitelisted(addr.clone())),
-            DataKey::AllStakers => StorageKey::Governance(GovernanceKey::AllStakers),
-            DataKey::Leaderboard => StorageKey::Governance(GovernanceKey::Leaderboard),
-            DataKey::LeaderboardSize => StorageKey::Governance(GovernanceKey::LeaderboardSize),
-            DataKey::InactivityThreshold => StorageKey::Governance(GovernanceKey::InactivityThreshold),
-            DataKey::KycRequired => StorageKey::Governance(GovernanceKey::KycRequired),
-            DataKey::KycApproved(addr) => StorageKey::Governance(GovernanceKey::KycApproved(addr.clone())),
-            DataKey::Stopped => StorageKey::Governance(GovernanceKey::Stopped),
-            DataKey::ShuttingDown => StorageKey::Governance(GovernanceKey::ShuttingDown),
-        }
-    }
-}
-
-/// Pool-wide share price at a particular ledger (issue #494).
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SharePriceSnapshot {
-    pub price_numerator: i128,
-    pub price_denominator: i128,
-    pub ledger: u32,
+    // NOTE: DataKey is already at Soroban's 50-variant cap for
+    // #[contracttype] enums (ScSpecUdtUnionV0::cases is VecM<_, 50> in
+    // stellar-xdr) — adding a 51st variant makes the #[contracttype] derive
+    // panic at compile time. New storage introduced by issues #205/#206/
+    // #207/#209 uses raw Symbol-keyed storage instead (see balance.rs),
+    // matching the pattern already established here for the same reason
+    // (e.g. symbol_short!("pool_cp"), symbol_short!("sl_tr"), the
+    // Symbol::new(env, "prop")/"voted" tuple keys above).
+    // Issues #822-#825: new features
+    // Issue #822: exact-output variants
+    // Issue #823: transaction deadline
+    // Issue #824: third-party submission
+    // Issue #825: streaming reward funding
+    PriorityFee,
 }
 
 /// Storage key for an individual epoch snapshot.
