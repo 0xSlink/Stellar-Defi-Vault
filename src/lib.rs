@@ -50,8 +50,9 @@ pub mod cross_pool_identity; // issue #470 â€” cross-pool identity
 pub mod daily_community_tip; // issue #458 â€” daily stake-weighted featured tip vote
 pub mod governance_params; // issue #712 â€” governance quorum and pass threshold
 pub mod lockdrop_campaign; // issue #460 â€” lockdrop campaign
-pub mod governance_source; // governance token distinct from the stake token
-pub mod zap_compound; // claim, swap to the stake token and compound in one call
+pub mod address_blocklist; // admin blocklist for compromised or sanctioned accounts
+pub mod withdrawal_allowlist; // user-defined withdrawal destination allowlist
+pub mod feature_flags; // feature-flag registry for optional modules
 pub mod rage_quit; // fee-free exit window during notice periods
 pub mod param_reasons; // reason strings on admin parameter changes
 pub mod upgrade_queue; // upgrader role + delayed, cancellable Wasm upgrades
@@ -196,6 +197,14 @@ mod test_issue_897;
 #[cfg(test)]
 mod test_rage_quit;
 
-pub mod vault_extensions_838_860_861_862;
 #[cfg(test)]
-mod test_issues_838_860_861_862;
+mod test_feature_flags;
+
+#[cfg(test)]
+mod test_address_blocklist;
+
+#[cfg(test)]
+mod test_exit;
+
+#[cfg(test)]
+mod test_withdrawal_allowlist;
