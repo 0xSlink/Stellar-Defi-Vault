@@ -1,4 +1,4 @@
-//! Stable error-code snapshot test for `VaultError`.
+//! Stable error-code snapshot tests for legacy error enums.
 //!
 //! # Policy: error codes are never reused
 //!
@@ -21,7 +21,8 @@
 //! caller. That is not a precedent for reusing a number that *has*
 //! shipped under its current meaning.
 //!
-//! New error cases get the next unused number. `VaultError` is already at
+//! New errors use the domain ranges documented in `docs/ERRORS.md`; all
+//! pre-existing enum values remain frozen. `VaultError` is already at
 //! Soroban's 50-variant cap (`ScSpecUdtUnionV0::cases` is a
 //! `VecM<_, 50>` in stellar-xdr — see the comment above `VaultExtError`
 //! in `errors.rs`), so from here on, new cases belong in one of the
@@ -49,7 +50,7 @@
 //! `_every_variant_has_a_snapshot_row`. Never edit or remove an existing
 //! row or match arm.
 
-use crate::errors::VaultError;
+use crate::errors::{VaultError, VaultLockError};
 
 /// `(variant, frozen numeric code)` for every `VaultError` variant that
 /// currently exists, in the order declared in `errors.rs`. Append new
@@ -199,5 +200,35 @@ fn _every_variant_has_a_snapshot_row(err: VaultError) {
         | VaultError::InvalidRewardAmount
         | VaultError::PoolShuttingDown
         | VaultError::NoAdmin => {}
+    }
+
+}
+
+const LOCK_CODES: &[(VaultLockError, u32)] = &[
+    (VaultLockError::NotInitialized, 1),
+    (VaultLockError::Unauthorized, 3),
+    (VaultLockError::ZeroAmount, 4),
+    (VaultLockError::InsufficientShares, 5),
+    (VaultLockError::VaultPaused, 6),
+    (VaultLockError::ArithmeticError, 8),
+    (VaultLockError::WithdrawalLimitExceeded, 9),
+    (VaultLockError::PositionNotFound, 18),
+    (VaultLockError::UseCooldownFlow, 20),
+    (VaultLockError::PositionLocked, 51),
+    (VaultLockError::LockDurationTooLong, 52),
+    (VaultLockError::InvalidLockBoostSchedule, 53),
+    (VaultLockError::TooManyLockBoostTiers, 54),
+    (VaultLockError::LockAlreadyActive, 55),
+    (VaultLockError::WithdrawOnlyMode, 56),
+];
+
+#[test]
+fn legacy_lock_error_codes_match_snapshot() {
+    for (variant, expected_code) in LOCK_CODES {
+        assert_eq!(
+            *variant as u32,
+            *expected_code,
+            "VaultLockError::{variant:?} is a frozen legacy code"
+        );
     }
 }

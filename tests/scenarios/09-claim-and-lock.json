@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "name": "claim before locking",
+  "steps": [
+    { "action": "deposit", "actor": "alice", "args": { "amount": 900 } },
+    { "action": "claim", "actor": "alice", "ledger_advance": 1 },
+    { "action": "lock", "actor": "alice", "args": { "duration_ledgers": 25 } }
+  ],
+  "expected": [
+    { "type": "last_result", "equals": true },
+    { "type": "shares", "actor": "alice", "equals": 900 },
+    { "type": "lock_active", "actor": "alice", "equals": true }
+  ]
+}
