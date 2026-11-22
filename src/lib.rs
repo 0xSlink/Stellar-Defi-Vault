@@ -174,7 +174,11 @@ mod test_issues_765_768;
 /// `testutils` feature, and in-crate tests get it via `cfg(test)`.
 #[cfg(any(test, feature = "testutils"))]
 pub mod fuzz_support {
-    pub use crate::balance::{amount_to_shares_with_decimals, shares_to_amount_with_decimals};
+    pub use crate::balance::{
+        amount_to_shares, amount_to_shares_with_decimals, shares_to_amount,
+        shares_to_amount_with_decimals,
+    };
+    pub use crate::math::{mul_div_ceil, mul_div_floor, MathError};
     pub use crate::reward_math::reward_for_ledgers;
 }
 #[cfg(test)]
