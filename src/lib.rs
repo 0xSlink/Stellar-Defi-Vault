@@ -50,6 +50,8 @@ pub mod cross_pool_identity; // issue #470 â€” cross-pool identity
 pub mod daily_community_tip; // issue #458 â€” daily stake-weighted featured tip vote
 pub mod governance_params; // issue #712 â€” governance quorum and pass threshold
 pub mod lockdrop_campaign; // issue #460 â€” lockdrop campaign
+pub mod governance_source; // governance token distinct from the stake token
+pub mod zap_compound; // claim, swap to the stake token and compound in one call
 pub mod rage_quit; // fee-free exit window during notice periods
 pub mod param_reasons; // reason strings on admin parameter changes
 pub mod upgrade_queue; // upgrader role + delayed, cancellable Wasm upgrades
@@ -169,6 +171,10 @@ mod test_resource_costs;
 
 #[cfg(test)]
 mod test_runbook_interface_snapshot;
+
+// ── Issue #878: insta snapshots of emitted event topics and data ─────────────
+#[cfg(test)]
+mod test_event_snapshots;
 
 // â”€â”€ Issue #770: upgrade test using previously-released WASM â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 #[cfg(test)]
