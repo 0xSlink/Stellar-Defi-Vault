@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "deposit top up",
+  "steps": [
+    { "action": "deposit", "actor": "alice", "args": { "amount": 600 } },
+    { "action": "deposit", "actor": "alice", "args": { "amount": 400 } }
+  ],
+  "expected": [
+    { "type": "shares", "actor": "alice", "equals": 1000 },
+    { "type": "total_shares", "equals": 1000 }
+  ]
+}

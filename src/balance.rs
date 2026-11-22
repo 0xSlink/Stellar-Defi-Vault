@@ -244,7 +244,64 @@ pub const MAX_QUIZZES: u32 = 20;
 /// Maximum allowed reward rate in basis points (500% APR). Issue #72.
 pub const MAX_RATE_BPS: u32 = 50_000;
 
-pub fn get_reward_pool_balance(env: &Env) -> i128 {
+// ── Issue #828: tiered reward rates by position size ──────────────────────────
+
+/// Configurable tiered reward rates based on stake bracket.
+///
+/// `tiers` is a `Vec<(min_amount, rate_bps)>`, sorted ascending by min_amount.
+/// Max 5 tiers. Each tier applies to stakes within its bracket:
+/// - Tier 0: stakes >= tiers[0].0 at rate tiers[0].1
+/// - Tier i: stakes >= tiers[i].0 and < tiers[i+1].0 at rate tiers[i].1
+/// - Highest tier: stakes >= last tier's min_amount at that rate
+/// Pass an empty Vec to use the base `reward_rate_bps`.
+pub fn set_rate_tiers(env: &Env, tiers: &Vec<(i128, u32)>) {
+    if tiers.len() > 5 {
+        return;
+    }
+    env.storage()
+        .instance()
+        .set(&symbol_short!("rate_tiers"), tiers);
+}
+
+/// Get the effective reward rate for a user's stake amount.
+///
+/// Returns the rate in basis points that applies to the user's position,
+/// considering the tiered rate configuration. If no tiers are configured,
+/// returns the base `reward_rate_bps`.
+pub fn get_effective_rate(env: &Env, amount: i128) -> u32 {
+    let tiers: Vec<(i128, u32)> = env
+        .storage()
+        .instance()
+        .get(&symbol_short!("rate_tiers"))
+        .unwrap_or(Vec::new(env));
+
+    if tiers.is_empty() {
+        return balance::get_reward_rate_bps(&env);
+    }
+
+    // Find the applicable tier for this amount
+    let mut rate_bps = tiers[0].1; // default to first tier rate
+    let mut found = false;
+
+    for i in 0..tiers.len() {
+        if amount >= tiers[i].0 {
+            rate_bps = tiers[i].1;
+            found = true;
+        } else {
+            break;
+        }
+    }
+
+    if found {
+        rate_bps
+    } else {
+        // Amount is below the first tier's minimum, use base rate
+        balance::get_reward_rate_bps(&env)
+    }
+}
+
+// pub fn get_reward_pool_balance(env: &Env) -> i128 {
+//
     env.storage()
         .instance()
         .get(&DataKey::RewardPoolBalance)
@@ -1458,7 +1515,51 @@ pub fn set_penalty_redistribution_mode(env: &Env, enabled: bool) {
         .set(&symbol_short!("pen_rdst"), &enabled);
 }
 
+// ── Issue #826: forfeit redistribution ─────────────────────────────────────────
+
+/// Add `amount` of forfeited rewards to the reward pool, benefiting remaining
+/// stakers. This is called when a user's position is forcibly closed or an
+/// early exit penalty is applied.
+pub fn distribute_forfeit(env: &Env, amount: i128) {
+    if amount <= 0 {
+        return;
+    }
+    let total_deposited = balance::get_total_deposited(&env);
+    balance::set_total_deposited(&env, total_deposited + amount);
+    balance::add_protocol_fee_collected(&env, amount);
+    let admin = admin::get_admin(&env)?;
+    events::penalty_redistributed(&env, amount, 1, env.ledger().sequence());
+}
+
+// ── Issue #827: early unlock with penalty ─────────────────────────────────────
+
+/// Set the maximum early exit penalty in basis points (max 10_000 = 100%).
+/// When a user unstakes before the lock period expires, the penalty is
+/// applied proportionally to the amount being withdrawn.
+///
+/// Penalty = amount * penalty_bps / 10_000
+/// The penalty is routed to the reward pool via `distribute_forfeit`, benefiting
+/// remaining stakers.
+pub fn set_early_unlock_penalty_bps(env: &Env, penalty_bps: u32) {
+    if penalty_bps > 10_000 {
+        return;
+    }
+    env.storage()
+        .instance()
+        .set(&symbol_short!("early_ublk"), &penalty_bps);
+}
+
+/// Get the current early exit penalty in basis points.
+pub fn get_early_unlock_penalty_bps(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&symbol_short!("early_ublk"))
+        .unwrap_or(0)
+}
+
 // ── Issue #199: insurance fund ────────────────────────────────────────────────
+
+pub fn set_insurance_rate_bps(env: &Env, bps: u32) {
 
 pub fn set_insurance_rate_bps(env: &Env, bps: u32) {
     env.storage()
@@ -1899,6 +2000,21 @@ pub fn set_position_expired_emitted(env: &Env, user: &Address) {
 pub fn get_position_expired_emitted(env: &Env, user: &Address) -> bool {
     let key = (Symbol::new(env, "exp_emit"), user.clone());
     env.storage().persistent().get(&key).unwrap_or(false)
+}
+
+// ── Issue #829: reward-excluded addresses ─────────────────────────────────────
+
+pub fn get_reward_excluded(env: &Env, user: &Address) -> bool {
+    env.storage()
+        .persistent()
+        .get(&DataKey::RewardExcluded(user.clone()))
+        .unwrap_or(false)
+}
+
+pub fn set_reward_excluded(env: &Env, user: &Address, excluded: bool) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::RewardExcluded(user.clone()), &excluded);
 }
 
 // ── Issue #234: Minimum Pool Size to Activate Rewards ─────────────────────────

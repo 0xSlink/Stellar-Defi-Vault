@@ -132,6 +132,11 @@ rustup target add wasm32-unknown-unknown
 cargo build --target wasm32-unknown-unknown --release
 ```
 
+The default build includes the governance, referrals, mirroring, strategies,
+and lockdrop module groups. For a smaller bare-vault build, use
+`--no-default-features --features minimal`; see [docs/FEATURES.md](docs/FEATURES.md)
+for individual module profiles and their effect on the generated interface.
+
 ### Test
 
 ```bash

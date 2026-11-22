@@ -235,6 +235,11 @@ impl VaultContract {
             },
         );
         env.storage().instance().set(&COUNT_KEY, &(used + 1));
+        crate::proposal_limits::mark_proposal_terminal(&env, proposal_id);
+        let open_count = balance::get_open_proposal_count(&env);
+        if open_count > 0 {
+            balance::set_open_proposal_count(&env, open_count - 1);
+        }
 
         events::guardian_proposal_vetoed(&env, &guardian, proposal_id, &reason_hash, now);
         Ok(())

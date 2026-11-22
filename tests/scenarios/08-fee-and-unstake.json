@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "name": "fee configuration and partial unstake",
+  "steps": [
+    { "action": "deposit", "actor": "alice", "args": { "amount": 1000 } },
+    { "action": "set_fee", "actor": "admin", "args": { "bps": 100 } },
+    { "action": "unstake", "actor": "alice", "args": { "shares": 100 } }
+  ],
+  "expected": [
+    { "type": "shares", "actor": "alice", "equals": 900 },
+    { "type": "last_result", "equals": 99 },
+    { "type": "fee_bps", "equals": 100 }
+  ]
+}

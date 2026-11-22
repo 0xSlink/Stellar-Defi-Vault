@@ -5,7 +5,7 @@
 
 use super::positions::assert_non_negative;
 use crate::storage::{DataKey, FeeRecipient, FlashStakeReceipt, WithdrawalReceipt};
-use soroban_sdk::{symbol_short, Address, Env, Vec};
+use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
 pub fn get_fees_burned(env: &Env) -> i128 {
     env.storage()
@@ -202,4 +202,58 @@ pub fn get_user_receipt_ids(env: &Env, user: &Address) -> Vec<u64> {
 pub fn set_user_receipt_ids(env: &Env, user: &Address, ids: &Vec<u64>) {
     let key = (symbol_short!("u_rcpt"), user.clone());
     env.storage().persistent().set(&key, ids);
+}
+
+// ── Issue #945: multi-token treasury accounting ──────────────────────────────
+
+fn treasury_balance_key(env: &Env, token: &Address) -> (Symbol, Address) {
+    (Symbol::new(env, "treas_bal"), token.clone())
+}
+
+fn treasury_tokens_key(env: &Env) -> Symbol {
+    Symbol::new(env, "treas_tkn")
+}
+
+fn bump_treasury_token_index(env: &Env, token: &Address) {
+    let key = treasury_tokens_key(env);
+    let mut tokens: Vec<Address> = env.storage().instance().get(&key).unwrap_or(Vec::new(env));
+    for existing in tokens.iter() {
+        if existing == *token {
+            return;
+        }
+    }
+    tokens.push_back(token.clone());
+    env.storage().instance().set(&key, &tokens);
+}
+
+pub fn get_treasury_balance(env: &Env, token: &Address) -> i128 {
+    env.storage()
+        .instance()
+        .get(&treasury_balance_key(env, token))
+        .unwrap_or(0)
+}
+
+pub fn set_treasury_balance(env: &Env, token: &Address, amount: i128) {
+    assert_non_negative(env, amount);
+    env.storage()
+        .instance()
+        .set(&treasury_balance_key(env, token), &amount);
+    if amount > 0 {
+        bump_treasury_token_index(env, token);
+    }
+}
+
+pub fn add_treasury_balance(env: &Env, token: &Address, amount: i128) {
+    if amount <= 0 {
+        return;
+    }
+    let current = get_treasury_balance(env, token);
+    set_treasury_balance(env, token, current.saturating_add(amount));
+}
+
+pub fn list_treasury_tokens(env: &Env) -> Vec<Address> {
+    env.storage()
+        .instance()
+        .get(&treasury_tokens_key(env))
+        .unwrap_or(Vec::new(env))
 }

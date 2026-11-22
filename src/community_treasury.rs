@@ -97,6 +97,10 @@ pub fn route_fee_revenue(env: &Env, fee_amount: i128) -> Result<i128, VaultError
         .checked_add(contribution)
         .ok_or(VaultError::ArithmeticError)?;
     set_community_treasury_balance(env, balance);
+
+    if let Some(token) = env.storage().instance().get::<_, Address>(&DataKey::Token) {
+        crate::balance::add_treasury_balance(env, &token, contribution);
+    }
     Ok(contribution)
 }
 
@@ -241,6 +245,10 @@ pub fn execute_spending(env: &Env, proposal_id: u32) -> Result<(), VaultError> {
     );
 
     set_community_treasury_balance(env, current_balance - proposal.amount);
+    let tracked = crate::balance::get_treasury_balance(env, &token_addr);
+    if tracked > 0 {
+        crate::balance::set_treasury_balance(env, &token_addr, (tracked - proposal.amount).max(0));
+    }
     proposal.executed = true;
     env.storage()
         .persistent()

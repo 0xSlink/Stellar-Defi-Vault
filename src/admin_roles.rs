@@ -196,6 +196,10 @@ impl VaultContract {
             .ok_or(RoleError::NotInitialized)?;
         token::Client::new(&env, &token_addr).transfer(&env.current_contract_address(), &to, &amount);
         crate::community_treasury::set_community_treasury_balance(&env, treasury - amount);
+        let tracked = balance::get_treasury_balance(&env, &token_addr);
+        if tracked > 0 {
+            balance::set_treasury_balance(&env, &token_addr, (tracked - amount).max(0));
+        }
         Ok(())
     }
 

@@ -1886,3 +1886,34 @@ pub fn strategy_unwound(
     let topics = (Symbol::new(env, "strategy_unwound"), strategy.clone());
     env.events().publish(topics, (recovered, loss, ledger));
 }
+
+/// Emitted when a queued operator slash is executed (issue #933).
+#[allow(clippy::too_many_arguments)]
+pub fn operator_slashed(
+    env: &Env,
+    operator: &Address,
+    slash_id: u32,
+    amount_bps: u32,
+    slash_amount: i128,
+    to_insurance: i128,
+    to_delegators: i128,
+    evidence_hash: &soroban_sdk::BytesN<32>,
+    ledger: u32,
+) {
+    let topics = (
+        Symbol::new(env, "operator_slashed"),
+        operator.clone(),
+        slash_id,
+    );
+    env.events().publish(
+        topics,
+        (
+            amount_bps,
+            slash_amount,
+            to_insurance,
+            to_delegators,
+            evidence_hash.clone(),
+            ledger,
+        ),
+    );
+}

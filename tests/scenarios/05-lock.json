@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "lock position",
+  "steps": [
+    { "action": "deposit", "actor": "alice", "args": { "amount": 1000 } },
+    { "action": "lock", "actor": "alice", "args": { "duration_ledgers": 20 } }
+  ],
+  "expected": [
+    { "type": "lock_active", "actor": "alice", "equals": true },
+    { "type": "shares", "actor": "alice", "equals": 1000 }
+  ]
+}

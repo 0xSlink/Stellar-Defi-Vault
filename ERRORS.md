@@ -1,5 +1,9 @@
 # Error Codes
 
+The compatibility policy and reserved ranges for future errors are documented
+in [`docs/ERRORS.md`](docs/ERRORS.md). Existing codes in this file remain
+unchanged.
+
 All contract entrypoints revert with typed `#[contracterror]` enums — never
 with raw string `panic!` messages — so callers and integrators can match on
 stable numeric codes instead of parsing strings. Each enum is `#[repr(u32)]`;
