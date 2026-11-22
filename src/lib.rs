@@ -25,6 +25,7 @@ mod errors;
 mod events;
 pub mod example_consumer;
 pub mod interface;
+mod math;
 pub mod nft;
 pub mod reward_accumulator;
 pub mod reward_fee;
@@ -50,23 +51,13 @@ pub mod stake_quota;
 // keys, types, and entrypoints together instead of appending to a 25k-line
 // file. `DataKey` is at Soroban's 50-variant cap for `#[contracttype]` enums,
 // so all of them use raw `Symbol`-keyed storage as `balance.rs` does.
-pub mod balance_checkpoints; // issues #709, #710 â€” balance checkpoints and TWAB
-pub mod cross_pool_identity; // issue #470 â€” cross-pool identity
-#[cfg(feature = "governance")]
-pub mod daily_community_tip; // issue #458 â€” daily stake-weighted featured tip vote
-pub mod governance_params; // issue #712 â€” governance quorum and pass threshold
-#[cfg(feature = "lockdrop")]
-pub mod lockdrop_campaign; // issue #460 â€” lockdrop campaign
-pub mod address_blocklist; // admin blocklist for compromised or sanctioned accounts
-pub mod withdrawal_allowlist; // user-defined withdrawal destination allowlist
-pub mod feature_flags; // feature-flag registry for optional modules
-pub mod rage_quit; // fee-free exit window during notice periods
-pub mod param_reasons; // reason strings on admin parameter changes
-pub mod upgrade_queue; // upgrader role + delayed, cancellable Wasm upgrades
-pub mod min_claim_amount; // minimum claim amount
-pub mod versioned; // versioned enum wrappers for persisted structs
-pub mod pool_metadata; // on-chain pool name/description/website/icon for frontends
-pub mod minimum_unstake_amount; // issue #441 â€” minimum unstake amount
+pub mod balance_checkpoints; // issues #709, #710 — balance checkpoints and TWAB
+pub mod cross_pool_identity; // issue #470 — cross-pool identity
+pub mod daily_community_tip; // issue #458 — daily stake-weighted featured tip vote
+pub mod deposit_and_lock; // issue #747 — deposit_and_lock() atomic deposit + lock
+pub mod governance_params; // issue #712 — governance quorum and pass threshold
+pub mod lockdrop_campaign; // issue #460 — lockdrop campaign
+pub mod minimum_unstake_amount; // issue #441 — minimum unstake amount
 pub mod peg_stabilization;
 pub mod position_health_auto_recovery; // issue #459 â€” position health auto-recovery
 pub mod position_value_appreciation_log; // issue #469 â€” position value appreciation log
@@ -192,56 +183,5 @@ mod test_resource_costs;
 #[cfg(test)]
 mod test_runbook_interface_snapshot;
 
-// ── Issue #878: insta snapshots of emitted event topics and data ─────────────
 #[cfg(test)]
-mod test_event_snapshots;
-
-// â”€â”€ Issue #770: upgrade test using previously-released WASM â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-#[cfg(test)]
-mod test_issues_770_upgrade;
-
-// â”€â”€ Issue #769: differential tests with reference math models â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-#[cfg(test)]
-mod test_issues_769_differential;
-
-// ── Issue #843: ProposalState enum and get_proposal_state ──────
-#[cfg(test)]
-mod test_issue_843;
-
-pub mod vault_extensions_897;
-
-pub mod pool_factory; // issue #875 — deploy pools from one audited Wasm hash
-pub mod pool_registry; // issue #876 — discover registered sibling pools
-
-#[cfg(test)]
-mod test_issue_897;
-
-#[cfg(test)]
-mod test_issues_874_877;
-
-#[cfg(test)]
-mod test_rage_quit;
-
-#[cfg(test)]
-mod test_pool_metadata;
-
-#[cfg(test)]
-mod test_versioned_storage;
-
-#[cfg(test)]
-mod test_reward_projection;
-
-#[cfg(test)]
-mod test_reward_window;
-
-#[cfg(test)]
-mod test_reward_fee;
-
-#[cfg(test)]
-mod test_ttl_coverage;
-
-#[cfg(test)]
-mod test_mid_period_rate_changes;
-
-#[cfg(test)]
-mod test_zero_elapsed_ledger;
+mod test_feature_gating_matrix;

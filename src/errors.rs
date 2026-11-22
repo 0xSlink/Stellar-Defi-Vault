@@ -280,6 +280,30 @@ pub enum VaultLockError {
     WithdrawOnlyMode = 56,
 }
 
+/// Converts a [`VaultError`] from `deposit()` into the closest
+/// [`VaultLockError`] case, so `deposit_and_lock()` (issue #747) can `?`
+/// through both `deposit()`'s and `lock_position()`'s errors with one
+/// return type. Every variant `deposit()` can actually return is mirrored
+/// here under the same name; anything else falls back to `ArithmeticError`
+/// (matching the fallback convention used by the `From<VaultError>` impls
+/// below for the other `Vault*Error` enums).
+impl From<VaultError> for VaultLockError {
+    fn from(err: VaultError) -> Self {
+        match err {
+            VaultError::NotInitialized => VaultLockError::NotInitialized,
+            VaultError::Unauthorized => VaultLockError::Unauthorized,
+            VaultError::ZeroAmount => VaultLockError::ZeroAmount,
+            VaultError::InsufficientShares => VaultLockError::InsufficientShares,
+            VaultError::VaultPaused => VaultLockError::VaultPaused,
+            VaultError::ArithmeticError => VaultLockError::ArithmeticError,
+            VaultError::WithdrawalLimitExceeded => VaultLockError::WithdrawalLimitExceeded,
+            VaultError::PositionNotFound => VaultLockError::PositionNotFound,
+            VaultError::UseCooldownFlow => VaultLockError::UseCooldownFlow,
+            _ => VaultLockError::ArithmeticError,
+        }
+    }
+}
+
 /// Soroban caps every `#[contracterror]`/`#[contracttype]` enum at 50 variants
 /// (`ScSpecUdtUnionV0::cases` is a `VecM<_, 50>` in stellar-xdr) ΓÇö `VaultError`
 /// above is already at exactly that cap, so new error cases for issues #205,
