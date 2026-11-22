@@ -76,6 +76,10 @@ pub enum DataKey {
     Stopped,
     // Pool deposit cap (used by balance.rs and vault.rs)
     PoolCap,
+    // Issue #939: on-chain upgrade history
+    UpgradeHistory(u32),
+    // Issue #940: successor pointer for deprecated pools
+    SuccessorPool(Address),
 }
 
 /// Issue #42: enum of all admin actions for the audit log.

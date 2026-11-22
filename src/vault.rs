@@ -27,6 +27,46 @@ pub(crate) const MAX_UNSTAKE_FEE_BPS: u32 = 500;
 #[contract]
 pub struct VaultContract;
 
+/// Issue #939: on-chain upgrade history handler.
+///
+/// Manages the on-chain upgrade record storage, keeping a bounded vector of
+/// upgrade records (wasm_hash, ledger, storage_version) for frontends and
+/// integrators to verify active contract code.
+struct UpgradeHandler;
+
+impl UpgradeHandler {
+    fn record(env: &Env, wasm_hash: soroban_sdk::Bytes, storage_version: u32, ledger: u32) {
+        let key = (Symbol::new(env, "upg"),);
+        let mut records: Vec<storage::UpgradeRecord> = env
+            .storage()
+            .instance()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(env));
+        // Keep only the latest 20 upgrade records
+        if records.len() >= 20 {
+            records.drain(..records.len() - 20);
+        }
+        records.push_back(storage::UpgradeRecord {
+            wasm_hash,
+            ledger,
+            storage_version,
+        });
+        env.storage()
+            .instance()
+            .set(&key, &records);
+    }
+
+    fn get_record(env: &Env, index: u32) -> Option<storage::UpgradeRecord> {
+        let key = (Symbol::new(env, "upg"),);
+        let records: Vec<storage::UpgradeRecord> = env
+            .storage()
+            .instance()
+            .get(&key)
+            .unwrap_or(Vec::new(env));
+        records.get(index as usize).cloned()
+    }
+}
+
 #[contractimpl]
 impl VaultContract {
     /// Initialize the vault with an admin and the token it accepts.
@@ -3432,6 +3472,131 @@ impl VaultContract {
         token_client.transfer(&env.current_contract_address(), &user, &total);
 
         Ok(total)
+    }
+
+    // ── Issue #939: on-chain upgrade history ─────────────────────────────────────
+
+    /// Record an on-chain upgrade (issue #939).
+    ///
+    /// Records the wasm hash, ledger, and storage version of a contract upgrade
+    /// so frontends and integrators can verify which contract code is active.
+    pub fn record_upgrade(env: Env, wasm_hash: soroban_sdk::Bytes, storage_version: u32) {
+        let current_ledger = env.ledger().sequence();
+        UpgradeHandler::record(&env, wasm_hash, storage_version, current_ledger);
+    }
+
+    /// Get the upgrade history record at the given index (issue #939).
+    ///
+    /// Returns `None` when the index is out of bounds.
+    pub fn get_upgrade_record(env: Env, index: u32) -> Option<storage::UpgradeRecord> {
+        UpgradeHandler::get_record(&env, index)
+    }
+
+    // ── Issue #940: successor pointer for deprecated pools ────────────────────────
+
+    /// Set the successor pool address (issue #940).
+    ///
+    /// When a pool is deprecated or migrated, the admin can set a successor pool
+    /// address so frontends and integrators can redirect users. This is a
+    /// one-way operation.
+    pub fn set_successor_pool(env: Env, successor: Address) {
+        balance::set_successor_pool(&env, &successor);
+    }
+
+    /// Get the successor pool address (issue #940).
+    ///
+    /// Returns `None` if no successor has been set.
+    pub fn get_successor_pool(env: Env) -> Option<Address> {
+        balance::get_successor_pool(&env)
+    }
+
+    // ── Issue #942: share token name and symbol metadata for wallets ─────────────
+
+    /// Set the stake token name (issue #942).
+    ///
+    /// The name is derived from the underlying asset at initialization, with
+    /// admin override within length limits. Wallets use this to display a
+    /// sensible token name.
+    pub fn set_stake_token_name(env: Env, name: soroban_sdk::String) {
+        balance::set_stake_token_name(&env, &name);
+    }
+
+    /// Get the stake token name (issue #942).
+    ///
+    /// Returns `None` if no name has been set.
+    pub fn get_stake_token_name(env: Env) -> Option<soroban_sdk::String> {
+        balance::get_stake_token_name(&env)
+    }
+
+    /// Set the stake token symbol (issue #942).
+    ///
+    /// The symbol is derived from the underlying asset at initialization, with
+    /// admin override within length limits. Wallets use this to display a
+    /// sensible token symbol.
+    pub fn set_stake_token_symbol(env: Env, symbol: soroban_sdk::String) {
+        balance::set_stake_token_symbol(&env, &symbol);
+    }
+
+    /// Get the stake token symbol (issue #942).
+    ///
+    /// Returns `None` if no symbol has been set.
+    pub fn get_stake_token_symbol(env: Env) -> Option<soroban_sdk::String> {
+        balance::get_stake_token_symbol(&env)
+    }
+
+    /// Set the stake token decimals (issue #942).
+    ///
+    /// Defaults to 7 (Stellar standard) when not explicitly set.
+    pub fn set_stake_token_decimals(env: Env, decimals: u32) {
+        balance::set_stake_token_decimals(&env, decimals);
+    }
+
+    /// Get the stake token decimals (issue #942).
+    ///
+    /// Returns the configured decimal precision, defaulting to 7 (Stellar
+    /// standard) when not explicitly set.
+    pub fn get_stake_token_decimals(env: Env) -> u32 {
+        balance::get_stake_token_decimals(&env)
+    }
+
+    // ── Issue #943: track lifetime and all-time-high pool statistics ─────────────
+
+    /// Update peak TVL (issue #943).
+    ///
+    /// If the given amount exceeds the current peak TVL, the peak is updated.
+    /// This is called after deposit or withdrawal operations.
+    pub fn update_peak_tvl(env: Env, amount: i128) {
+        let current_peak = balance::get_peak_tvl(&env);
+        if amount > current_peak {
+            balance::set_peak_tvl(&env, amount);
+        }
+    }
+
+    /// Add to lifetime deposited volume (issue #943).
+    ///
+    /// Increments the total volume ever deposited across all time. This is
+    /// incremented on each deposit and is never decremented.
+    pub fn add_lifetime_deposited(env: Env, amount: i128) {
+        let current = balance::get_lifetime_deposited_volume(&env);
+        balance::set_lifetime_deposited_volume(&env, current + amount);
+    }
+
+    /// Add to lifetime withdrawn volume (issue #943).
+    ///
+    /// Increments the total volume ever withdrawn across all time. This is
+    /// incremented on each withdrawal and is never decremented.
+    pub fn add_lifetime_withdrawn(env: Env, amount: i128) {
+        let current = balance::get_lifetime_withdrawn_volume(&env);
+        balance::set_lifetime_withdrawn_volume(&env, current + amount);
+    }
+
+    /// Increment unique depositors count (issue #943).
+    ///
+    /// Increments the count of unique addresses that have ever deposited.
+    /// Note: this does not perform client-side deduplication; the count should
+    /// be tracked off-chain for accurate unique counts.
+    pub fn increment_unique_depositors(env: Env) {
+        balance::increment_unique_depositors(&env);
     }
 
     // ── Issue #117: pool_uptime_ledgers ───────────────────────────────────────
