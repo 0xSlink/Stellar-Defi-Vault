@@ -3666,8 +3666,14 @@ impl VaultContract {
     ///
     /// Issue #705: withdraw-only mode blocks deposits through the same gate,
     /// with the same `PoolShuttingDown` error (`VaultError` has no free slot).
+    ///
+    /// Issue #833: pro-rata insolvency mode blocks deposits the same way, since
+    /// new capital must not be diluted by a haircut it never agreed to.
     fn require_no_sunset(env: &Env) -> Result<(), VaultError> {
-        if balance::get_sunset_exit_deadline(env).is_some() || withdraw_only_mode::is_active(env) {
+        if balance::get_sunset_exit_deadline(env).is_some()
+            || withdraw_only_mode::is_active(env)
+            || crate::insolvency_mode::is_active(env)
+        {
             return Err(VaultError::PoolShuttingDown);
         }
         Ok(())
@@ -3785,12 +3791,10 @@ impl VaultContract {
         }
         let total_shares = balance::get_total_shares(env);
         let total_deposited = balance::get_total_deposited(env);
-        let amount = balance::shares_to_amount_with_decimals(
-            total_shares,
-            total_deposited,
-            shares,
-            balance::get_stake_decimals(env),
-        )
+        // Issue #833: in insolvency mode the exit is priced at the pro-rata
+        // rate (assets / total_shares) so every withdrawer shares the
+        // shortfall; otherwise the principal-backed conversion applies.
+        let amount = crate::insolvency_mode::redemption_amount(env, shares)
             .ok_or(VaultError::ArithmeticError)?;
         let token_addr = Self::token_address(env)?;
         let token_client = token::Client::new(env, &token_addr);
@@ -6947,7 +6951,9 @@ impl VaultContract {
         let total_shares = balance::get_total_shares(env);
         let total_deposited = balance::get_total_deposited(env);
 
-        let amount = balance::shares_to_amount(total_shares, total_deposited, shares)
+        // Issue #833: insolvency mode prices exits pro-rata (assets /
+        // total_shares); otherwise the principal-backed conversion applies.
+        let amount = crate::insolvency_mode::redemption_amount(env, shares)
             .ok_or(VaultError::ArithmeticError)?;
 
         // Referral tracking: decrease referrer's total_referred_stake by the
@@ -7322,12 +7328,17 @@ impl VaultContract {
             return Ok(());
         }
         let checkpoint = balance::get_reward_checkpoint_ledger(env, user).unwrap_or(current_ledger);
+        // Issue #830: when reward accrual is paused, only accrue up to the
+        // pause start, and on resume do not retroactively fill the paused
+        // window. Outside a pause this is exactly `[checkpoint, current)`.
+        let (window_start, window_end) =
+            crate::rewards_pause::accrual_bounds(env, checkpoint, current_ledger);
         let additional_reward = Self::reward_between_ledgers(
             env,
             user,
             current_shares,
-            checkpoint,
-            current_ledger,
+            window_start,
+            window_end,
             true,
         )?;
         // Issue #700: clamp to the current epoch's remaining emission budget.
@@ -7341,7 +7352,11 @@ impl VaultContract {
             balance::set_accrued_reward(env, user, updated_accrued);
         }
 
-        balance::set_reward_checkpoint_ledger(env, user, current_ledger);
+        balance::set_reward_checkpoint_ledger(
+            env,
+            user,
+            crate::rewards_pause::checkpoint_after_accrual(env, checkpoint, current_ledger),
+        );
 
         // Issue #650: Update global reward accumulator and user checkpoint
         let _ = crate::reward_accumulator::update_global_accumulator(env);
@@ -8054,6 +8069,10 @@ impl VaultContract {
     /// comment on `VaultFeatureError`), and "pool winding down, no new
     /// stakes" is exactly what this condition also means.
     fn require_not_sunsetting(env: &Env) -> Result<(), VaultError> {
+        // Issue #833: insolvency mode blocks new stakes through this gate too.
+        if crate::insolvency_mode::is_active(env) {
+            return Err(VaultError::PoolShuttingDown);
+        }
         match balance::get_sunset_state(env) {
             SunsetState::GracePeriodActive
             | SunsetState::ForceResolutionActive
@@ -8367,8 +8386,9 @@ impl VaultContract {
         } else if !Self::try_reinvest_reward(env, staker, &token_addr, payout)?
             && !Self::try_auto_convert_reward(env, staker, &token_addr, payout)?
         {
-            let token_client = token::Client::new(env, &token_addr);
-            token_client.transfer(&env.current_contract_address(), destination, &payout);
+            // Issue #831: a configured claim split (or the user's default claim
+            // destination) decides where the payout lands.
+            crate::claim_split::pay_reward(env, staker, destination, payout, &token_addr);
         }
 
         balance::set_reward_pool_balance(env, reward_pool - reward + loan_repayment);
@@ -15826,3 +15846,11 @@ pub mod operator_slash;
 pub mod reward_projection;
 #[path = "reward_window.rs"]
 pub mod reward_window;
+#[path = "rewards_pause.rs"]
+pub mod rewards_pause;
+#[path = "claim_split.rs"]
+pub mod claim_split;
+#[path = "insolvency_mode.rs"]
+pub mod insolvency_mode;
+#[path = "recurring_deposit.rs"]
+pub mod recurring_deposit;
