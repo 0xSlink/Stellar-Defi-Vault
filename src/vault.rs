@@ -203,6 +203,18 @@ soroban_sdk::contractmeta!(
     key = "description",
     val = "A staking pool contract for Stellar DeFi vault positions."
 );
+soroban_sdk::contractmeta!(
+    key = "security_contact",
+    val = "https://github.com/Rickyy1017/Stellar-Defi-Vault/security/advisories/new"
+);
+soroban_sdk::contractmeta!(
+    key = "source_repo",
+    val = "https://github.com/Rickyy1017/Stellar-Defi-Vault"
+);
+soroban_sdk::contractmeta!(
+    key = "security_policy_url",
+    val = "https://github.com/Rickyy1017/Stellar-Defi-Vault/blob/main/docs/SECURITY.md"
+);
 
 const REENTRANCY_KEY: Symbol = symbol_short!("re_entry");
 
@@ -3304,6 +3316,58 @@ impl VaultContract {
 
     pub fn get_community_treasury_balance(env: Env) -> i128 {
         crate::community_treasury::get_community_treasury_balance(&env)
+    }
+
+    /// Read-only: tracked treasury balance for a specific token (issue #945).
+    pub fn get_treasury_balance(env: Env, token: Address) -> i128 {
+        balance::get_treasury_balance(&env, &token)
+    }
+
+    /// Read-only: tokens with tracked treasury balances (issue #945).
+    /// Bounded by the number of distinct tokens routed to the treasury.
+    pub fn list_treasury_tokens(env: Env) -> Vec<Address> {
+        balance::list_treasury_tokens(&env)
+    }
+
+    /// Admin: withdraw a tracked treasury token balance to `to` (issue #945).
+    /// Limited to the tracked balance for `token`.
+    pub fn withdraw_treasury(
+        env: Env,
+        admin: Address,
+        token: Address,
+        amount: i128,
+        to: Address,
+    ) -> Result<(), VaultError> {
+        admin::require_admin_as(&env, &admin)?;
+        if amount <= 0 {
+            return Err(VaultError::ZeroAmount);
+        }
+        let tracked = balance::get_treasury_balance(&env, &token);
+        if amount > tracked {
+            return Err(VaultError::InsufficientRewardPool);
+        }
+
+        token::Client::new(&env, &token).transfer(
+            &env.current_contract_address(),
+            &to,
+            &amount,
+        );
+        balance::set_treasury_balance(&env, &token, tracked - amount);
+
+        let stake_token = Self::token_address(&env)?;
+        if token == stake_token {
+            let ct = crate::community_treasury::get_community_treasury_balance(&env);
+            crate::community_treasury::set_community_treasury_balance(
+                &env,
+                (ct - amount).max(0),
+            );
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "treas_wd"), admin.clone()),
+            (token, to, amount, env.ledger().sequence()),
+        );
+        Ok(())
     }
 
     pub fn get_spending_proposal(
@@ -6986,6 +7050,7 @@ impl VaultContract {
                 if recipients.is_empty() {
                     let reward_pool = balance::get_reward_pool_balance(env);
                     balance::set_reward_pool_balance(env, reward_pool + treasury_fee);
+                    balance::add_treasury_balance(env, &token_addr, treasury_fee);
                 } else {
                     Self::distribute_fee(env, &token_addr, treasury_fee, &recipients);
                 }
@@ -13896,6 +13961,7 @@ impl VaultContract {
                 } else {
                     let reward_pool = balance::get_reward_pool_balance(env);
                     balance::set_reward_pool_balance(env, reward_pool + remaining_fee);
+                    balance::add_treasury_balance(env, &token_addr, remaining_fee);
                 }
             }
         }
