@@ -485,6 +485,7 @@ impl VaultContract {
         crate::vault_extensions_546_549::maybe_lock_deposit(&env, &user, amount, shares_minted);
 
         // Issue #453: trigger mirroring for followers
+        #[cfg(feature = "mirroring")]
         crate::position_mirroring::maybe_mirror_action(&env, &user, symbol_short!("stake"), amount);
 
         crate::activity_log::record(
@@ -655,6 +656,7 @@ impl VaultContract {
             received,
             shares_minted,
         );
+        #[cfg(feature = "mirroring")]
         crate::position_mirroring::maybe_mirror_action(
             &env,
             &receiver,
@@ -704,6 +706,7 @@ impl VaultContract {
     }
 
     /// Admin: configure referral rewards in basis points of the first deposit.
+    #[cfg(feature = "referrals")]
     pub fn set_referral_bonus_bps(
         env: Env,
         admin_addr: Address,
@@ -1418,6 +1421,7 @@ impl VaultContract {
         let user_payout = crate::claim_fee::apply_claim_fee(&env, &staker, reward_after_bounty)?;
         // Deduct mirror performance fee when the follower has opted in; net
         // payout to the follower is reduced and the fee goes directly to the leader.
+        #[cfg(feature = "mirroring")]
         let user_payout =
             crate::position_mirroring::apply_mirror_perf_fee(&env, &staker, user_payout)?;
 
@@ -3671,6 +3675,7 @@ impl VaultContract {
         }
         // Issue #548: same large-deposit lock as `stake`.
         crate::vault_extensions_546_549::maybe_lock_deposit(env, user, amount, shares);
+        #[cfg(feature = "mirroring")]
         crate::position_mirroring::maybe_mirror_action(env, user, symbol_short!("stake"), amount);
         crate::activity_log::record(
             env,
@@ -3713,16 +3718,20 @@ impl VaultContract {
             .ok_or(VaultError::ArithmeticError)?;
         let token_addr = Self::token_address(env)?;
         let token_client = token::Client::new(env, &token_addr);
-        let current_idle = token_client.balance(&env.current_contract_address());
-        if current_idle < amount {
-            let needed = amount - current_idle;
-            let _ = crate::vault_extensions_765_768::pull_from_strategies(env, needed);
+        #[cfg(feature = "strategies")]
+        {
+            let current_idle = token_client.balance(&env.current_contract_address());
+            if current_idle < amount {
+                let needed = amount - current_idle;
+                let _ = crate::vault_extensions_765_768::pull_from_strategies(env, needed);
+            }
         }
         token_client.transfer(&env.current_contract_address(), staker, &amount);
         balance::set_shares(env, staker, user_shares - shares);
         balance::set_total_shares(env, total_shares - shares);
         balance::set_total_deposited(env, total_deposited - amount);
         // Issue #453: trigger mirroring for unstake
+        #[cfg(feature = "mirroring")]
         crate::position_mirroring::maybe_mirror_action(
             env,
             staker,
@@ -4306,6 +4315,7 @@ impl VaultContract {
     /// refers B, then B refers A).
     ///
     /// `root` is always returned, even with no referrals of its own.
+    #[cfg(feature = "referrals")]
     pub fn referral_tree_data(
         env: Env,
         root: Address,
@@ -7022,10 +7032,13 @@ impl VaultContract {
         Self::append_stake_history(env, staker, StakeAction::Unstake, amount_returned);
 
         let token_client = token::Client::new(env, &token_addr);
-        let current_idle = token_client.balance(&env.current_contract_address());
-        if current_idle < amount_returned {
-            let needed = amount_returned - current_idle;
-            let _ = crate::vault_extensions_765_768::pull_from_strategies(env, needed);
+        #[cfg(feature = "strategies")]
+        {
+            let current_idle = token_client.balance(&env.current_contract_address());
+            if current_idle < amount_returned {
+                let needed = amount_returned - current_idle;
+                let _ = crate::vault_extensions_765_768::pull_from_strategies(env, needed);
+            }
         }
         token_client.transfer(&env.current_contract_address(), recipient, &amount_returned);
 
@@ -9458,6 +9471,7 @@ impl VaultContract {
     /// ignored and the original referrer receives the credit). Self-referral is
     /// rejected with `InvalidAddress`. Behaves identically to `stake` in every
     /// other respect.
+    #[cfg(feature = "referrals")]
     pub fn stake_with_referral(
         env: Env,
         staker: Address,
@@ -9516,6 +9530,7 @@ impl VaultContract {
     /// cached. `total_referred_stake` reflects the current live stake of all
     /// users the referrer brought in (decreasing as they unstake). No auth
     /// required.
+    #[cfg(feature = "referrals")]
     pub fn referral_leaderboard(env: Env) -> Vec<ReferralLeaderboardEntry> {
         const CAP: u32 = 10;
         let registry = balance::get_referral_registry(&env);
@@ -9872,6 +9887,7 @@ impl VaultContract {
 
         balance::set_proposal(&env, id, &proposal);
         // Issue #712: freeze the quorum/threshold that apply to this proposal.
+        #[cfg(feature = "governance")]
         crate::governance_params::snapshot(&env, id);
         // Freeze the governance source (stake / token / both) for this proposal.
         crate::governance_source::snapshot(&env, id);
@@ -10020,6 +10036,7 @@ impl VaultContract {
         proposal.enacted = true;
         // Issue #712: quorum, then threshold, from the params snapshotted at
         // creation (simple majority when none were configured).
+        #[cfg(feature = "governance")]
         if crate::governance_params::passes(
             &env,
             proposal_id,
@@ -13900,6 +13917,7 @@ impl VaultContract {
             }
         }
         // Issue #453: trigger mirroring for unstake
+        #[cfg(feature = "mirroring")]
         crate::position_mirroring::maybe_mirror_action(
             env,
             staker,
@@ -13951,6 +13969,7 @@ impl VaultContract {
         let user_payout = crate::claim_fee::apply_claim_fee(env, staker, reward_after_bounty)?;
         // Deduct mirror performance fee when the follower has opted in; net
         // payout to the follower is reduced and the fee goes directly to the leader.
+        #[cfg(feature = "mirroring")]
         let user_payout =
             crate::position_mirroring::apply_mirror_perf_fee(env, staker, user_payout)?;
 
@@ -15429,18 +15448,22 @@ pub mod vault_extensions_542_545;
 pub mod vault_extensions_463_466;
 #[path = "position_health_auto_recovery.rs"]
 pub mod position_health_auto_recovery;
+#[cfg(feature = "lockdrop")]
 #[path = "lockdrop_campaign.rs"]
 pub mod lockdrop_campaign;
 #[path = "proof_of_humanity_hook.rs"]
 pub mod proof_of_humanity_hook;
+#[cfg(feature = "governance")]
 #[path = "roadmap_voting.rs"]
 pub mod roadmap_voting;
 #[path = "staker_region_tag.rs"]
 pub mod staker_region_tag;
+#[cfg(any(feature = "referrals", feature = "mirroring"))]
 #[path = "staker_network_graph.rs"]
 pub mod staker_network_graph;
 #[path = "staker_favor_rounding.rs"]
 pub mod staker_favor_rounding;
+#[cfg(feature = "governance")]
 #[path = "daily_community_tip.rs"]
 pub mod daily_community_tip;
 #[path = "time_locked_admin_proposal.rs"]
@@ -15451,6 +15474,7 @@ pub mod meta_staking;
 pub mod batch_vote;
 #[path = "daily_withdrawal_limit.rs"]
 pub mod daily_withdrawal_limit;
+#[cfg(feature = "mirroring")]
 #[path = "position_mirroring.rs"]
 pub mod position_mirroring;
 #[path = "withdraw_only_mode.rs"]

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "claim with no accrued reward",
+  "steps": [
+    { "action": "deposit", "actor": "alice", "args": { "amount": 1000 } },
+    { "action": "claim", "actor": "alice", "ledger_advance": 20 }
+  ],
+  "expected": [
+    { "type": "last_result", "equals": 0 },
+    { "type": "shares", "actor": "alice", "equals": 1000 }
+  ]
+}

@@ -46,6 +46,16 @@ Format for an entry:
 
 ## Unreleased
 
+### Optional Wasm module profiles and scenario coverage
+- **What:** added Cargo feature profiles for governance, referrals, mirroring,
+  strategies, and lockdrop; added a minimal build profile, feature-matrix CI
+  size/spec checks, and JSON-driven vault scenarios.
+- **Why:** deployments can omit optional contract entrypoints and contributors
+  can exercise reusable multi-step scenarios without writing Rust for each one.
+- **Breaking:** no change to default features or the default contract interface;
+  entrypoints are absent when their corresponding optional feature is disabled.
+- **PR:** closes #923, #924, #925, and #926.
+
 ### Stellar Wave issue tracking
 - **What:** links the follow-up PR to issues #739, #740, and #741 individually.
 - **Why:** the changes for these issues were merged in PR #816, but editing

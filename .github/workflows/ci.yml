@@ -130,6 +130,155 @@ jobs:
           fi
           echo "OK: Wasm size ${size} bytes is within budget ${budget} bytes."
 
+  feature-profiles:
+    name: Feature profile (${{ matrix.profile }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: default
+            features: default
+          - profile: minimal
+            features: minimal
+          - profile: governance
+            features: governance
+          - profile: referrals
+            features: referrals
+          - profile: mirroring
+            features: mirroring
+          - profile: strategies
+            features: strategies
+          - profile: lockdrop
+            features: lockdrop
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.94.0
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "ci-feature-profiles"
+          key: ${{ matrix.profile }}
+      - name: Install Stellar CLI
+        run: command -v stellar >/dev/null 2>&1 || cargo install --locked stellar-cli
+      - name: Run scenario tests
+        env:
+          PROFILE: ${{ matrix.profile }}
+          FEATURES: ${{ matrix.features }}
+        run: |
+          set -euo pipefail
+          if [ "$PROFILE" = default ]; then
+            cargo test --features testutils --test scenarios
+          else
+            cargo test --no-default-features --features "$FEATURES,testutils" --test scenarios
+          fi
+      - name: Build Wasm and report size
+        env:
+          PROFILE: ${{ matrix.profile }}
+          FEATURES: ${{ matrix.features }}
+        run: |
+          set -euo pipefail
+          if [ "$PROFILE" = default ]; then
+            cargo build --target wasm32-unknown-unknown --release --features vault-wasm
+          else
+            cargo build --target wasm32-unknown-unknown --release --no-default-features --features "$FEATURES,vault-wasm"
+          fi
+          wasm=target/wasm32-unknown-unknown/release/stellar_defi_vault.wasm
+          size=$(wc -c < "$wasm" | tr -d '[:space:]')
+          echo "Wasm size ($PROFILE): $size bytes"
+          {
+            echo "### Wasm feature profile: $PROFILE"
+            echo ""
+            echo "| Profile | Features | Wasm size |"
+            echo "|---|---|---:|"
+            echo "| $PROFILE | $FEATURES | $size bytes |"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Check disabled module entrypoints are absent
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          set -euo pipefail
+          wasm=target/wasm32-unknown-unknown/release/stellar_defi_vault.wasm
+          stellar contract info interface --wasm "$wasm" --output json-formatted > interface.json
+          case "$PROFILE" in
+            default) disabled=() ;;
+            minimal) disabled=(set_governance_params stake_with_referral set_mirror_config harvest start_lockdrop) ;;
+            governance) disabled=(stake_with_referral set_mirror_config harvest start_lockdrop) ;;
+            referrals) disabled=(set_governance_params set_mirror_config harvest start_lockdrop) ;;
+            mirroring) disabled=(set_governance_params stake_with_referral harvest start_lockdrop) ;;
+            strategies) disabled=(set_governance_params stake_with_referral set_mirror_config start_lockdrop) ;;
+            lockdrop) disabled=(set_governance_params stake_with_referral set_mirror_config harvest) ;;
+          esac
+          for entrypoint in "${disabled[@]}"; do
+            if jq -e --arg name "$entrypoint" '.. | objects | select(.name? == $name)' interface.json >/dev/null; then
+              echo "::error::$entrypoint unexpectedly appears in the $PROFILE contract spec"
+              exit 1
+            fi
+          done
+
+  wasm-size-delta:
+    name: Minimal Wasm size change
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.94.0
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "ci-minimal-size-delta"
+      - name: Build base-branch minimal baseline
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          git worktree add --detach "$RUNNER_TEMP/vault-base" "$BASE_SHA"
+          (
+            cd "$RUNNER_TEMP/vault-base"
+            cargo build --target wasm32-unknown-unknown --release --no-default-features --features vault-wasm
+          )
+          base_wasm="$RUNNER_TEMP/vault-base/target/wasm32-unknown-unknown/release/stellar_defi_vault.wasm"
+          echo "BASE_SIZE=$(wc -c < "$base_wasm" | tr -d '[:space:]')" >> "$GITHUB_ENV"
+      - name: Build minimal profile and record delta
+        run: |
+          set -euo pipefail
+          cargo build --target wasm32-unknown-unknown --release --no-default-features --features minimal,vault-wasm
+          wasm=target/wasm32-unknown-unknown/release/stellar_defi_vault.wasm
+          size=$(wc -c < "$wasm" | tr -d '[:space:]')
+          delta=$((size - BASE_SIZE))
+          {
+            echo "### Minimal Wasm size before and after"
+            echo ""
+            echo "| Metric | Size |"
+            echo "|---|---:|"
+            echo "| Base branch (no optional profile) | $BASE_SIZE bytes |"
+            echo "| This branch (`minimal`) | $size bytes |"
+            echo "| Change | $delta bytes |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  dependency-hygiene:
+    name: Unused dependency and dead-code audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install cargo-udeps
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-udeps
+      - name: Review unused dependencies
+        run: cargo +nightly udeps --features testutils
+      - name: Review minimal-profile dead-code diagnostics
+        run: cargo check --no-default-features --features minimal
+
   snapshot-hygiene:
     name: Snapshot hygiene
     runs-on: ubuntu-latest
