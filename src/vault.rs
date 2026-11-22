@@ -15509,6 +15509,8 @@ pub mod proposal_state;
 pub mod proposal_window;
 #[path = "proposal_limits.rs"]
 pub mod proposal_limits;
+#[path = "node_operator.rs"]
+pub mod node_operator;
 #[path = "reward_projection.rs"]
 pub mod reward_projection;
 #[path = "reward_window.rs"]

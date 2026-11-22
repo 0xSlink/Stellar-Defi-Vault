@@ -220,3 +220,5 @@ mod test_reward_window;
 mod test_issue_938;
 #[cfg(test)]
 mod test_issue_937;
+#[cfg(test)]
+mod test_issue_932;
