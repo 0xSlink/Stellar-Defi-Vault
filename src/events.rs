@@ -296,6 +296,24 @@ pub fn position_opened(env: &Env, user: &Address, amount: i128) {
         .publish(topics, (amount, env.ledger().sequence()));
 }
 
+/// Emitted by `exit()` once rewards are paid and the whole position is closed.
+/// `principal` is what `recipient` actually received (after any penalty and
+/// fee), `reward` is what `user` received, and `fee` is the unstake fee charged.
+pub fn position_exited(
+    env: &Env,
+    user: &Address,
+    recipient: &Address,
+    principal: i128,
+    reward: i128,
+    fee: i128,
+) {
+    let topics = (symbol_short!("pos_exit"), user);
+    env.events().publish(
+        topics,
+        (principal, reward, fee, recipient.clone(), env.ledger().sequence()),
+    );
+}
+
 pub fn position_closed(env: &Env, user: &Address) {
     let topics = (symbol_short!("pos_clos"), user);
     env.events().publish(topics, (env.ledger().sequence(),));
@@ -1787,6 +1805,19 @@ pub fn admin_proposal_cancelled(env: &Env, admin: &Address, cancelled_admin: &Ad
     env.events().publish(
         (symbol_short!("adm_canc"), admin.clone()),
         (cancelled_admin.clone(), env.ledger().sequence()),
+    );
+}
+
+/// Emitted whenever a deprecated entrypoint is invoked (issue #881).
+///
+/// `function` names the deprecated entrypoint and `caller` is the address that
+/// signed the call, so indexers can find remaining integrations before the
+/// removal release. See `docs/DEPRECATION.md` for the notice period and the
+/// list of deprecated entrypoints.
+pub fn deprecated_call(env: &Env, caller: &Address, function: &Symbol, ledger: u32) {
+    env.events().publish(
+        (symbol_short!("deprec"), caller.clone()),
+        (function.clone(), ledger),
     );
 }
 

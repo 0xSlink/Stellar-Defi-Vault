@@ -37,19 +37,17 @@ pub const MAX_BATCH_VOTES: u32 = 10;
 /// that layer is not yet registered as a crate module.
 const LAST_VOTE_KEY: Symbol = symbol_short!("gpd_lv");
 
-/// A user's governance vote weight, adjusted for the pool-wide `VoteWeightMode`.
+/// A user's governance vote weight on `proposal_id`, adjusted for the pool-wide
+/// `VoteWeightMode`.
 ///
-/// In `Linear` mode (default) weight equals the user's raw staked token amount.
-/// In `Quadratic` mode weight equals `isqrt(raw_amount)`, reducing whale dominance.
-/// See `crate::quadratic_vote::isqrt` for the rounding contract.
-fn vote_weight(env: &Env, user: &Address) -> i128 {
-    let shares = balance::get_shares(env, user);
-    if shares <= 0 {
-        return 0;
-    }
-    let total_shares = balance::get_total_shares(env);
-    let total_deposited = balance::get_total_deposited(env);
-    let raw = balance::shares_to_amount(total_shares, total_deposited, shares).unwrap_or(0);
+/// The raw weight follows the governance source (stake, governance token, or
+/// both) snapshotted for the proposal. In `Linear` mode (default) weight equals
+/// that raw amount; in `Quadratic` mode it equals `isqrt(raw_amount)`, reducing
+/// whale dominance. See `crate::quadratic_vote::isqrt` for the rounding
+/// contract.
+fn vote_weight(env: &Env, user: &Address, proposal_id: u32) -> i128 {
+    let source = crate::governance_source::proposal_config(env, proposal_id);
+    let raw = crate::governance_source::raw_weight(env, &source, user).unwrap_or(0);
     match balance::get_vote_weight_mode(env) {
         crate::storage::VoteWeightMode::Linear => raw,
         crate::storage::VoteWeightMode::Quadratic => crate::quadratic_vote::isqrt(raw),
@@ -120,12 +118,16 @@ impl VaultContract {
             return Err(BatchVoteError::BatchTooLarge);
         }
 
-        if balance::get_shares(&env, &user) <= 0 {
+        // Stake-sourced governance needs a staking position; token-sourced
+        // proposals are checked on their own weight in the loop below.
+        if balance::get_shares(&env, &user) <= 0
+            && crate::governance_source::current_config(&env).mode
+                == crate::governance_source::GovernanceSource::Stake
+        {
             return Err(BatchVoteError::PositionNotFound);
         }
 
         let now = env.ledger().sequence();
-        let weight = vote_weight(&env, &user);
         let mut results: Vec<(u32, bool, String)> = Vec::new(&env);
         let mut any_success = false;
 
@@ -155,6 +157,7 @@ impl VaultContract {
                 results.push_back((id, false, String::from_str(&env, REASON_ALREADY_VOTED)));
                 continue;
             }
+            let weight = vote_weight(&env, &user, id);
             if weight <= 0 {
                 results.push_back((id, false, String::from_str(&env, REASON_NO_POSITION)));
                 continue;

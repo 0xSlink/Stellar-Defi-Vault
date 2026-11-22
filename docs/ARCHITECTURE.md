@@ -68,3 +68,17 @@ When an external strategy is compromised:
 - **Immediate Disabling**: The strategy is marked `disabled = true`. Disabled strategies are barred from receiving new allocations.
 - **Contained Recovery**: The vault attempts to withdraw all allocated principal from the adapter. Adapter panics or failures are trapped and contained.
 - **Shortfall Reconciliation**: Any difference between allocated principal and recovered tokens is immediately channeled into the two-tier loss accounting pipeline.
+
+---
+
+## Principal and Reward Accounting Separation (#863)
+
+When the staking token and the reward token are the same asset (e.g. XLM staking earning XLM rewards), reward claims must never be permitted to drain depositor principal:
+
+1. **Independent State Trackers**:
+   - `total_principal` (`tot_prnc`): Monotonically incremented on deposits and decremented on withdrawals.
+   - `reward_pool_balance` (`rwd_pool`): Seeded and replenished strictly via `fund_reward_pool_explicit()` and yield allocations.
+2. **Strict Invariant**:
+   - Every claim operation verifies: $\text{claim\_amount} \le \text{reward\_pool\_balance}$.
+   - If the reward pool balance is exhausted, the claim reverts with `VaultError::InsufficientRewardPool` rather than dipping into depositor principal.
+   - Even if the reward pool is drained to zero, all stakers retain 100% of their withdrawable principal at all times.
