@@ -25,6 +25,8 @@ use crate::vault::{VaultContract, VaultContractClient};
 
 /// Maximum proposals retained; oldest are dropped once exceeded.
 pub const MAX_ADMIN_PROPOSALS: u32 = 50;
+/// Maximum configuration-change type label length, in bytes.
+pub const MAX_CHANGE_TYPE_LEN: u32 = 64;
 
 const NEXT_ID_KEY: Symbol = symbol_short!("acp_nid");
 const PROPOSALS_KEY: Symbol = symbol_short!("acp_lst");
@@ -82,9 +84,10 @@ pub(crate) fn cancel_open_proposals(env: &Env) -> u32 {
 
 #[cfg_attr(not(feature = "testutils"), contractimpl)]
 impl VaultContract {
-    /// Issue #455: Admin publicly announces an intended configuration
-    /// change, executable only after `delay_ledgers` have passed. Returns
-    /// the new proposal's id.
+    /// Issue #455: Admin announces an intended configuration change,
+    /// executable after `delay_ledgers`. `change_type` is limited to
+    /// `MAX_CHANGE_TYPE_LEN` bytes (`InputTooLong` otherwise). Returns the
+    /// new proposal's id.
     pub fn announce_config_change(
         env: Env,
         admin_addr: Address,
@@ -94,6 +97,9 @@ impl VaultContract {
     ) -> Result<u32, VaultQuizError> {
         admin_addr.require_auth();
         admin::require_admin(&env)?;
+        if change_type.len() > MAX_CHANGE_TYPE_LEN {
+            return Err(VaultQuizError::InputTooLong);
+        }
 
         let mut proposals = get_proposals(&env);
         while proposals.len() >= MAX_ADMIN_PROPOSALS {
@@ -111,8 +117,11 @@ impl VaultContract {
             cancelled: false,
             executed: false,
         };
+        let executes_at = proposal.executes_at;
         proposals.push_back(proposal);
         set_proposals(&env, &proposals);
+        // Open a rage-quit window until the announced change can execute.
+        crate::rage_quit::open_window(&env, executes_at);
 
         env.events().publish(
             (symbol_short!("acp_ann"), admin_addr),

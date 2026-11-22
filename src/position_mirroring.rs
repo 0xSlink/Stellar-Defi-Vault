@@ -98,6 +98,10 @@ fn remove_follower(env: &Env, leader: &Address, follower: &Address) {
 /// Try to mirror a stake/unstake for all followers of leader.
 /// Called from vault stake/unstake paths.
 pub fn maybe_mirror_action(env: &Env, leader: &Address, action: Symbol, amount: i128) {
+    // The Mirroring feature flag stops followers from mirroring while it is off.
+    if !crate::feature_flags::is_enabled(env, crate::feature_flags::Feature::Mirroring) {
+        return;
+    }
     let followers = get_followers(env, leader);
     if followers.is_empty() {
         return;
@@ -111,7 +115,7 @@ pub fn maybe_mirror_action(env: &Env, leader: &Address, action: Symbol, amount: 
         if !cfg.active || cfg.leader != *leader {
             continue;
         }
-        let mirror_amount = amount.saturating_mul(cfg.mirror_ratio_bps as i128) / 10_000;
+        let mirror_amount = amount.saturating_mul(cfg.mirror_ratio_bps as i128) / crate::constants::BPS_DENOMINATOR;
         if mirror_amount <= 0 {
             continue;
         }
@@ -212,7 +216,7 @@ pub fn apply_mirror_perf_fee(
     let fee_amount = reward_after_claim_fee
         .checked_mul(cfg.leader_fee_bps as i128)
         .ok_or(VaultError::ArithmeticError)?
-        .checked_div(10_000)
+        .checked_div(crate::constants::BPS_DENOMINATOR)
         .ok_or(VaultError::ArithmeticError)?;
 
     if fee_amount <= 0 {
@@ -265,10 +269,13 @@ impl VaultContract {
         leader_fee_bps: u32,
     ) -> Result<(), VaultExtError> {
         follower.require_auth();
+        if !crate::feature_flags::is_enabled(&env, crate::feature_flags::Feature::Mirroring) {
+            return Err(VaultExtError::FeatureDisabled);
+        }
         if follower == leader {
             return Err(VaultExtError::InvalidMultisigConfig);
         }
-        if mirror_ratio_bps == 0 || mirror_ratio_bps > 10_000 {
+        if mirror_ratio_bps == 0 || mirror_ratio_bps > crate::constants::BPS_DENOMINATOR_U32 {
             return Err(VaultExtError::InvalidFeeAllocation);
         }
         if max_mirror_amount <= 0 {

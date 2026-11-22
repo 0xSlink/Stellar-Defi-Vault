@@ -169,8 +169,8 @@ pub enum VaultError {
     RelayerNotApproved = 46,
     /// Caller is not on the yield source whitelist (issue #126).
     NotYieldSource = 47,
-    /// notify_reward_added called with a zero or negative amount (issue #126).
-    InvalidRewardAmount = 48,
+    /// A supplied value expected to be a SHA-256 digest was not exactly 32 bytes.
+    InvalidHashLength = 48,
     /// Returned when a new stake is attempted after `start_graceful_shutdown` has been called.
     PoolShuttingDown = 49,
     /// Returned by every admin-gated entrypoint after admin renouncement.
@@ -178,8 +178,42 @@ pub enum VaultError {
 }
 
 impl VaultError {
+    /// Backwards compatibility alias for the former error name at discriminant 48.
+    #[allow(non_upper_case_globals)]
+    pub const InvalidRewardAmount: VaultError = VaultError::InvalidHashLength;
     /// Backwards compatibility alias for `InvalidTokenInterface`.
     pub const InvalidToken: VaultError = VaultError::InvalidTokenInterface;
+    /// Returned by `claim` / `claim_partial` when the amount is below the
+    /// configured minimum claim and does not empty the pending reward.
+    /// `VaultError` is at the 50-variant cap, so this aliases
+    /// `BelowMinimumStake` (code 11) instead of adding a slot.
+    pub const ClaimBelowMinimum: VaultError = VaultError::BelowMinimumStake;
+    /// Returned by optional-module entrypoints that return `VaultError` while
+    /// their feature flag is off (see `feature_flags`). `VaultError` is at the
+    /// 50-variant cap, so this aliases `VaultPaused` (code 6): the module is
+    /// switched off, just as a paused vault is.
+    pub const FeatureDisabled: VaultError = VaultError::VaultPaused;
+    /// Returned when a blocked address (see `address_blocklist`) tries to
+    /// deposit, claim, transfer, or withdraw to anywhere but its own address.
+    /// `VaultError` is at the 50-variant cap, so this aliases `NotWhitelisted`
+    /// (code 19), the existing "caller is not allowed in" case.
+    pub const AddressBlocked: VaultError = VaultError::NotWhitelisted;
+    /// Returned when a payout would go to an address that is not on the user's
+    /// withdrawal allowlist (see `withdrawal_allowlist`). Aliases
+    /// `NotWhitelisted` (code 19) because `VaultError` is at the 50-variant cap.
+    pub const DestinationNotAllowed: VaultError = VaultError::NotWhitelisted;
+    /// Returned by `set_withdrawal_allowlist()` when more than 5 addresses are
+    /// supplied. Aliases `BatchTooLarge` (code 22) for the same reason.
+    pub const AllowlistTooLong: VaultError = VaultError::BatchTooLarge;
+}
+
+impl VaultExtError {
+    /// Returned by optional-module entrypoints that return `VaultExtError`
+    /// while their feature flag is off (see `feature_flags`). `VaultExtError`
+    /// is at the 50-variant cap, so this aliases `BuybackNotEnabled` (code 29),
+    /// the existing "this optional feature is not enabled" case.
+    #[allow(non_upper_case_globals)]
+    pub const FeatureDisabled: VaultExtError = VaultExtError::BuybackNotEnabled;
 }
 
 /// Typed validation failures for public APIs that historically panicked.
@@ -654,6 +688,10 @@ pub enum VaultQuizError {
     /// Returned by `execute_config_change()` (issue #455) when called
     /// before the proposal's `executes_at` ledger has been reached.
     AdminProposalNotYetExecutable = 18,
+    /// A supplied SHA-256 digest was not exactly 32 bytes.
+    InvalidHashLength = 19,
+    /// A public text input exceeded its named maximum byte length.
+    InputTooLong = 20,
 }
 
 impl From<VaultError> for VaultQuizError {
@@ -777,9 +815,16 @@ pub enum VaultCampaignError {
     /// Returned by `set_region_tag()` when the code is empty or contains a
     /// non-alphanumeric character.
     InvalidRegionCode = 34,
+    /// A supplied SHA-256 digest was not exactly 32 bytes.
+    InvalidHashLength = 35,
+    /// A public string input exceeded its documented byte limit.
+    InputTooLong = 36,
     /// Returned by `set_region_tag()` when a new tag would exceed
     /// `MAX_REGION_TAGGED_STAKERS`.
     TooManyRegionTags = 35,
+    /// Returned by lockdrop entrypoints while the `Lockdrop` feature flag is
+    /// off (see `feature_flags`).
+    FeatureDisabled = 37,
 }
 
 impl From<VaultError> for VaultCampaignError {
@@ -1309,48 +1354,188 @@ impl From<VaultError> for VaultSafetyError {
     }
 }
 
-/// Errors for proposal categories, expedited proposals, vote delegation expiry,
-/// and strategy adapter management (issues #761-#764).
+/// Errors for strategy operations, idle buffer ratio, yield harvest,
+/// loss accounting, and emergency unwinds (issues #765-#768).
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
-pub enum GovernanceStrategyError {
+pub enum StrategyError {
+    /// Action not allowed for the caller.
     Unauthorized = 1,
+    /// Contract or token not initialized.
     NotInitialized = 2,
+    /// Numeric overflow or underflow.
     ArithmeticError = 3,
+    /// Supplied amount must be positive.
     ZeroAmount = 4,
-    InvalidBps = 5,
-    InvalidPeriod = 6,
-    ProposalNotFound = 7,
-    ProposalAlreadyEnacted = 8,
-    VotingStillActive = 9,
-    QuorumNotMet = 10,
-    ThresholdNotMet = 11,
-    ProposalVetoed = 12,
-    ExpeditedLimitReached = 13,
-    InsufficientBond = 14,
-    DelegationExpired = 15,
-    SelfDelegationNotAllowed = 16,
-    MaxStrategiesReached = 17,
-    StrategyAlreadyExists = 18,
-    StrategyNotFound = 19,
-    StrategyCapExceeded = 20,
-    AdapterCallFailed = 21,
-    PositionNotFound = 22,
-    AlreadyVoted = 23,
-    DelayNotElapsed = 24,
+    /// Allocation would drop idle funds below the required idle buffer ratio (issue #765).
+    IdleBufferBreached = 5,
+    /// Strategy is disabled and cannot accept new allocations (issue #768).
+    StrategyDisabled = 6,
+    /// Strategy adapter was not found.
+    StrategyNotFound = 7,
+    /// Min idle buffer ratio exceeds 10 000 bps (100%).
+    InvalidRatio = 8,
+    /// Performance fee bps exceeds cap (50%).
+    InvalidFee = 9,
+    /// External adapter call failed or returned unexpected data.
+    AdapterFailed = 10,
+    /// No loss recorded or loss amount is non-positive.
+    NoLoss = 11,
 }
 
-impl From<VaultError> for GovernanceStrategyError {
+impl From<VaultError> for StrategyError {
     fn from(err: VaultError) -> Self {
         match err {
-            VaultError::Unauthorized => GovernanceStrategyError::Unauthorized,
-            VaultError::NotInitialized => GovernanceStrategyError::NotInitialized,
-            VaultError::ArithmeticError => GovernanceStrategyError::ArithmeticError,
-            VaultError::ZeroAmount => GovernanceStrategyError::ZeroAmount,
-            VaultError::PositionNotFound => GovernanceStrategyError::PositionNotFound,
-            _ => GovernanceStrategyError::Unauthorized,
+            VaultError::Unauthorized => StrategyError::Unauthorized,
+            VaultError::NotInitialized => StrategyError::NotInitialized,
+            VaultError::ArithmeticError => StrategyError::ArithmeticError,
+            VaultError::ZeroAmount => StrategyError::ZeroAmount,
+            _ => StrategyError::Unauthorized,
         }
     }
 }
 
+/// Errors for the upgrader role and queued Wasm upgrades. `VaultError` is at
+/// Soroban's 50-variant cap, so these get their own enum.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum UpgradeError {
+    /// Caller is not the admin / upgrader / guardian the call requires.
+    Unauthorized = 1,
+    /// No admin is stored.
+    NotInitialized = 2,
+    /// Ledger arithmetic overflowed.
+    ArithmeticError = 3,
+    /// An upgrade is already pending; cancel it before queueing another.
+    UpgradeAlreadyQueued = 4,
+    /// No upgrade is pending.
+    NoUpgradeQueued = 5,
+    /// The upgrade delay has not elapsed yet.
+    UpgradeNotReady = 6,
+}
+
+impl From<VaultError> for UpgradeError {
+    fn from(err: VaultError) -> Self {
+        match err {
+            VaultError::NotInitialized => UpgradeError::NotInitialized,
+            VaultError::ArithmeticError => UpgradeError::ArithmeticError,
+            _ => UpgradeError::Unauthorized,
+        }
+    }
+}
+
+/// Errors for the `*_with_reason` admin setter variants. `VaultError` is at
+/// Soroban's 50-variant cap, so these get their own enum.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum ParamReasonError {
+    /// Caller is not the stored admin.
+    Unauthorized = 1,
+    /// No admin is stored.
+    NotInitialized = 2,
+    /// Arithmetic overflowed while applying the change.
+    ArithmeticError = 3,
+    /// The underlying setter rejected the new value (out of range, negative…).
+    InvalidValue = 4,
+    /// A sensitive setter (rates, fees, caps) was called with an empty reason.
+    EmptyReason = 5,
+    /// The reason is longer than `MAX_REASON_LEN` (128) bytes.
+    ReasonTooLong = 6,
+}
+
+impl From<VaultError> for ParamReasonError {
+    fn from(err: VaultError) -> Self {
+        match err {
+            VaultError::Unauthorized => ParamReasonError::Unauthorized,
+            VaultError::NotInitialized | VaultError::NoAdmin => ParamReasonError::NotInitialized,
+            VaultError::ArithmeticError => ParamReasonError::ArithmeticError,
+            _ => ParamReasonError::InvalidValue,
+        }
+    }
+}
+
+/// Errors for the on-chain pool metadata record. `VaultError` is at
+/// Soroban's 50-variant cap, so these get their own enum.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum PoolMetadataError {
+    /// Caller is not the stored admin.
+    Unauthorized = 1,
+    /// No admin is stored.
+    NotInitialized = 2,
+    /// The metadata revision counter overflowed.
+    ArithmeticError = 3,
+    /// The pool name is empty.
+    EmptyName = 4,
+    /// The pool name is longer than 64 bytes.
+    NameTooLong = 5,
+    /// The description is longer than 512 bytes.
+    DescriptionTooLong = 6,
+    /// The website is longer than 128 bytes.
+    WebsiteTooLong = 7,
+}
+
+impl From<VaultError> for PoolMetadataError {
+    fn from(err: VaultError) -> Self {
+        match err {
+            VaultError::NotInitialized | VaultError::NoAdmin => PoolMetadataError::NotInitialized,
+            VaultError::ArithmeticError => PoolMetadataError::ArithmeticError,
+            _ => PoolMetadataError::Unauthorized,
+        }
+    }
+}
+
+/// Errors for `project_reward`. `VaultError` is at Soroban's 50-variant cap,
+/// so these get their own enum.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum ProjectionError {
+    /// No admin is stored (the pool is not initialized).
+    NotInitialized = 1,
+    /// An intermediate value overflowed.
+    ArithmeticError = 2,
+    /// `at_ledger` is earlier than the current ledger.
+    LedgerInPast = 3,
+}
+
+impl From<VaultError> for ProjectionError {
+    fn from(err: VaultError) -> Self {
+        match err {
+            VaultError::NotInitialized | VaultError::NoAdmin => ProjectionError::NotInitialized,
+            _ => ProjectionError::ArithmeticError,
+        }
+    }
+}
+
+/// Errors for the reward campaign window. `VaultError` is at Soroban's
+/// 50-variant cap, so these get their own enum.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum RewardWindowError {
+    /// Caller is not the stored admin.
+    Unauthorized = 1,
+    /// No admin is stored.
+    NotInitialized = 2,
+    /// Settling accrual before the change overflowed.
+    ArithmeticError = 3,
+    /// `end_ledger` is not after `start_ledger`.
+    InvalidWindow = 4,
+    /// There is no window to clear.
+    NoWindow = 5,
+}
+
+impl From<VaultError> for RewardWindowError {
+    fn from(err: VaultError) -> Self {
+        match err {
+            VaultError::NotInitialized | VaultError::NoAdmin => RewardWindowError::NotInitialized,
+            VaultError::Unauthorized => RewardWindowError::Unauthorized,
+            _ => RewardWindowError::ArithmeticError,
+        }
+    }
+}

@@ -1,0 +1,29 @@
+version: "3.8"
+
+services:
+  exporter:
+    build:
+      context: ../scripts/exporter
+    ports:
+      - "9100:9100"
+    environment:
+      - SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
+      - CONTRACT_ID=CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/alert-rules.yml:/etc/prometheus/alert-rules.yml
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./grafana/pool-dashboard.json:/var/lib/grafana/dashboards/pool-dashboard.json
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin

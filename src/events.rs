@@ -1,10 +1,29 @@
 use crate::storage::AdminAction;
-use soroban_sdk::{symbol_short, Address, Env, Symbol};
+use soroban_sdk::{contractevent, symbol_short, Address, Env, Symbol};
+
+/// Deposit event preserving the existing topic order and positional data.
+#[contractevent(topics = ["deposit"], data_format = "vec")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DepositEvent {
+    /// Account that deposited.
+    #[topic]
+    pub depositor: Address,
+    /// Token amount deposited.
+    pub amount: i128,
+    /// Shares minted for the deposit.
+    pub shares_minted: i128,
+    /// Ledger sequence at which the deposit occurred.
+    pub ledger: u32,
+}
 
 pub fn deposit(env: &Env, depositor: &Address, amount: i128, shares_minted: i128, ledger: u32) {
-    let topics = (symbol_short!("deposit"), depositor);
-    env.events()
-        .publish(topics, (amount, shares_minted, ledger));
+    DepositEvent {
+        depositor: depositor.clone(),
+        amount,
+        shares_minted,
+        ledger,
+    }
+    .publish(env);
 }
 
 pub fn referral_bonus_paid(
@@ -275,6 +294,24 @@ pub fn position_opened(env: &Env, user: &Address, amount: i128) {
     let topics = (symbol_short!("pos_open"), user);
     env.events()
         .publish(topics, (amount, env.ledger().sequence()));
+}
+
+/// Emitted by `exit()` once rewards are paid and the whole position is closed.
+/// `principal` is what `recipient` actually received (after any penalty and
+/// fee), `reward` is what `user` received, and `fee` is the unstake fee charged.
+pub fn position_exited(
+    env: &Env,
+    user: &Address,
+    recipient: &Address,
+    principal: i128,
+    reward: i128,
+    fee: i128,
+) {
+    let topics = (symbol_short!("pos_exit"), user);
+    env.events().publish(
+        topics,
+        (principal, reward, fee, recipient.clone(), env.ledger().sequence()),
+    );
 }
 
 pub fn position_closed(env: &Env, user: &Address) {
@@ -1771,6 +1808,19 @@ pub fn admin_proposal_cancelled(env: &Env, admin: &Address, cancelled_admin: &Ad
     );
 }
 
+/// Emitted whenever a deprecated entrypoint is invoked (issue #881).
+///
+/// `function` names the deprecated entrypoint and `caller` is the address that
+/// signed the call, so indexers can find remaining integrations before the
+/// removal release. See `docs/DEPRECATION.md` for the notice period and the
+/// list of deprecated entrypoints.
+pub fn deprecated_call(env: &Env, caller: &Address, function: &Symbol, ledger: u32) {
+    env.events().publish(
+        (symbol_short!("deprec"), caller.clone()),
+        (function.clone(), ledger),
+    );
+}
+
 /// Emitted when the global reward accumulator index updates (Issue #650).
 pub fn reward_accumulator_updated(env: &Env, global_index: i128, ledger: u32) {
     env.events().publish(
@@ -1779,118 +1829,60 @@ pub fn reward_accumulator_updated(env: &Env, global_index: i128, ledger: u32) {
     );
 }
 
-/// Emitted when parameters for a proposal category are updated (issue #761).
-pub fn category_params_set(
-    env: &Env,
-    admin: &Address,
-    category: u32,
-    quorum_bps: u32,
-    threshold_bps: u32,
-    period_ledgers: u32,
-    ledger: u32,
-) {
+/// Emitted when the minimum idle buffer ratio is updated (issue #765).
+pub fn min_idle_ratio_updated(env: &Env, admin: &Address, bps: u32, ledger: u32) {
     env.events().publish(
-        (symbol_short!("cat_prm"), admin.clone()),
-        (category, quorum_bps, threshold_bps, period_ledgers, ledger),
+        (symbol_short!("idle_upd"), admin.clone()),
+        (bps, ledger),
     );
 }
 
-/// Emitted when an expedited emergency proposal is created (issue #762).
-pub fn expedited_proposal_created(
-    env: &Env,
-    proposer: &Address,
-    proposal_id: u32,
-    bond: i128,
-    ends_at: u32,
-    ledger: u32,
-) {
+/// Emitted when funds are allocated to a strategy adapter (issue #765).
+pub fn strategy_allocated(env: &Env, adapter: &Address, amount: i128, ledger: u32) {
     env.events().publish(
-        (symbol_short!("exp_prop"), proposer.clone()),
-        (proposal_id, bond, ends_at, ledger),
-    );
-}
-
-/// Emitted when an expedited proposal bond is refunded (issue #762).
-pub fn expedited_bond_refunded(
-    env: &Env,
-    proposer: &Address,
-    proposal_id: u32,
-    bond: i128,
-    ledger: u32,
-) {
-    env.events().publish(
-        (symbol_short!("exp_rfnd"), proposer.clone()),
-        (proposal_id, bond, ledger),
-    );
-}
-
-/// Emitted when an expedited proposal bond is slashed for failing quorum (issue #762).
-pub fn expedited_bond_slashed(
-    env: &Env,
-    proposer: &Address,
-    proposal_id: u32,
-    bond: i128,
-    ledger: u32,
-) {
-    env.events().publish(
-        (symbol_short!("exp_slsh"), proposer.clone()),
-        (proposal_id, bond, ledger),
-    );
-}
-
-/// Emitted when vote delegation with optional expiry is configured (issue #763).
-pub fn vote_delegation_with_expiry_set(
-    env: &Env,
-    delegator: &Address,
-    delegate: &Address,
-    expires_at: Option<u32>,
-    ledger: u32,
-) {
-    env.events().publish(
-        (symbol_short!("vdel_exp"), delegator.clone()),
-        (delegate.clone(), expires_at, ledger),
-    );
-}
-
-/// Emitted when an external yield strategy adapter is added (issue #764).
-pub fn strategy_added(
-    env: &Env,
-    admin: &Address,
-    adapter: &Address,
-    cap_bps: u32,
-    ledger: u32,
-) {
-    env.events().publish(
-        (symbol_short!("str_add"), admin.clone()),
-        (adapter.clone(), cap_bps, ledger),
-    );
-}
-
-/// Emitted when idle funds are allocated to a strategy adapter (issue #764).
-pub fn strategy_allocated(
-    env: &Env,
-    keeper: &Address,
-    adapter: &Address,
-    amount: i128,
-    ledger: u32,
-) {
-    env.events().publish(
-        (symbol_short!("str_alc"), keeper.clone()),
-        (adapter.clone(), amount, ledger),
-    );
-}
-
-/// Emitted when funds are recalled or withdrawn from a strategy adapter (issue #764).
-pub fn strategy_withdrawn(
-    env: &Env,
-    adapter: &Address,
-    amount: i128,
-    ledger: u32,
-) {
-    env.events().publish(
-        (symbol_short!("str_wdr"), adapter.clone()),
+        (symbol_short!("str_alloc"), adapter.clone()),
         (amount, ledger),
     );
 }
 
+/// Emitted when funds are pulled from a strategy to satisfy a withdrawal (issue #765).
+pub fn strategy_pulled(env: &Env, adapter: &Address, amount: i128, ledger: u32) {
+    env.events().publish(
+        (symbol_short!("str_pull"), adapter.clone()),
+        (amount, ledger),
+    );
+}
 
+/// Emitted when strategy yield is harvested and performance fee taken (issue #766).
+pub fn harvested(env: &Env, strategy: &Address, gain: i128, fee: i128, ledger: u32) {
+    let topics = (Symbol::new(env, "harvested"), strategy.clone());
+    env.events().publish(topics, (gain, fee, ledger));
+}
+
+/// Emitted when a strategy shortfall or realized loss is recorded (issue #767).
+pub fn strategy_loss_recorded(
+    env: &Env,
+    strategy: &Address,
+    total_loss: i128,
+    reserve_absorbed: i128,
+    share_price_absorbed: i128,
+    ledger: u32,
+) {
+    let topics = (Symbol::new(env, "strategy_loss_recorded"), strategy.clone());
+    env.events().publish(
+        topics,
+        (total_loss, reserve_absorbed, share_price_absorbed, ledger),
+    );
+}
+
+/// Emitted when a strategy is emergency unwound and disabled (issue #768).
+pub fn strategy_unwound(
+    env: &Env,
+    strategy: &Address,
+    recovered: i128,
+    loss: i128,
+    ledger: u32,
+) {
+    let topics = (Symbol::new(env, "strategy_unwound"), strategy.clone());
+    env.events().publish(topics, (recovered, loss, ledger));
+}

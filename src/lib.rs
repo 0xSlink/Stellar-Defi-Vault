@@ -16,6 +16,7 @@
 
 mod admin;
 mod balance;
+mod constants;
 pub mod claim_receipts;
 mod errors;
 mod events;
@@ -53,26 +54,33 @@ pub mod governance_params; // issue #712 — governance quorum and pass threshol
 pub mod lockdrop_campaign; // issue #460 — lockdrop campaign
 pub mod minimum_unstake_amount; // issue #441 — minimum unstake amount
 pub mod peg_stabilization;
-pub mod position_health_auto_recovery; // issue #459 — position health auto-recovery
-pub mod position_value_appreciation_log; // issue #469 — position value appreciation log
-pub mod proof_of_humanity_hook; // issue #461 — proof-of-humanity hook
-pub mod reward_token_audit_trail; // issue #467 — reward token audit trail
-pub mod roadmap_voting; // issue #462 — roadmap voting
-pub mod stake_funded_bug_bounty; // issue #468 — stake-funded bug bounty
-pub mod stake_hooks; // issue #711 — stake and unstake hook contracts
-pub mod staker_favor_rounding; // issue #457 — always round in the staker's favor
-pub mod staker_network_graph; // issue #456 — staker delegation/referral/mirror network graph
+pub mod position_health_auto_recovery; // issue #459 â€” position health auto-recovery
+pub mod position_value_appreciation_log; // issue #469 â€” position value appreciation log
+pub mod proof_of_humanity_hook; // issue #461 â€” proof-of-humanity hook
+pub mod reward_token_audit_trail; // issue #467 â€” reward token audit trail
+pub mod roadmap_voting; // issue #462 â€” roadmap voting
+pub mod stake_funded_bug_bounty; // issue #468 â€” stake-funded bug bounty
+pub mod stake_hooks; // issue #711 â€” stake and unstake hook contracts
+pub mod staker_favor_rounding; // issue #457 â€” always round in the staker's favor
+pub mod staker_network_graph; // issue #456 â€” staker delegation/referral/mirror network graph
 pub mod time_locked_admin_proposal; // issue #455 -- time-locked admin config-change announcements
-pub mod vault_extensions_463_466; // issues #463-#466 — clawback, NFT boost, milestone, param log
-pub mod vault_extensions_761_764; // issues #761-#764 — proposal categories, expedited proposals, delegation expiry, strategy adapters
-pub mod vault_extensions_792_795; // issues #792-#795 — reward decimals, funder attribution, treasury rate limit, surplus rescue
-pub mod vesting_cliff; // issue #287 — reward vesting cliff // reward-token price peg stabilization
+pub mod vault_extensions_463_466; // issues #463-#466 â€” clawback, NFT boost, milestone, param log
+pub mod vault_extensions_765_768; // issues #765-#768 â€” idle buffer, harvest, loss policy, emergency unwind
+pub mod vesting_cliff; // issue #287 â€” reward vesting cliff // reward-token price peg stabilization
 
 pub use nft::StakeReceiptNFT;
 pub use vault::VaultContract;
 
 #[cfg(test)]
+mod test_issues_751;
+#[cfg(test)]
 mod test_issues_757_760;
+
+#[cfg(test)]
+mod test_admin_contract_auth;
+
+#[cfg(test)]
+mod test_withdrawal_cooldown;
 
 #[cfg(test)]
 mod test;
@@ -125,11 +133,11 @@ mod test_peg_stabilization;
 #[cfg(test)]
 mod test_issues_709_712;
 
-// ── Issue #659: storage-layout upgrade-safety snapshot ───────────────────────
+// â”€â”€ Issue #659: storage-layout upgrade-safety snapshot â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 #[cfg(test)]
 mod test_storage_layout;
 
-// ── Issue #660: resource-footprint limits for batch/loop entrypoints ─────────
+// â”€â”€ Issue #660: resource-footprint limits for batch/loop entrypoints â”€â”€â”€â”€â”€â”€â”€â”€â”€
 #[cfg(test)]
 mod test_resource_footprint;
 
@@ -143,16 +151,7 @@ mod test_token_interface_compliance;
 mod test_vec_storage_capacity;
 
 #[cfg(test)]
-mod test_loyalty_points;
-
-#[cfg(test)]
-mod test_claim_streak;
-
-#[cfg(test)]
-mod test_issue_754;
-
-#[cfg(test)]
-mod test_solvency_report;
+mod test_issues_765_768;
 
 /// Pure math surfaces exposed for property tests and `cargo-fuzz` (issue #661).
 ///

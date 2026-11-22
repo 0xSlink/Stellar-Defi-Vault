@@ -164,6 +164,8 @@ pub fn propose_fee_change(env: &Env, new_bps: u32) -> Result<bool, VaultError> {
             .saturating_add(notice_ledgers);
         let change = PendingFeeChange { new_bps, effective_at };
         set_pending_fee_change(env, &change);
+        // Open a rage-quit window: users may exit fee-free until the hike applies.
+        crate::rage_quit::open_window(env, effective_at);
         env.events().publish(
             (symbol_short!("fee_queued"),),
             (new_bps, effective_at, env.ledger().sequence()),

@@ -1,10 +1,23 @@
 # Changelog
 
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-This project does not yet follow semantic versioning releases; entries are
-grouped under **Unreleased** until a tagging/release process is defined
-(see [docs/AUDIT_READINESS.md](./docs/AUDIT_READINESS.md) for the related
-commit/tag-freeze process ahead of an external audit).
+Entries are grouped under **Unreleased** until they are cut into a release.
+See [docs/RELEASING.md](./docs/RELEASING.md) for the release process
+(tagging, the CI build, and its signed build-provenance attestation) — see
+[docs/AUDIT_READINESS.md](./docs/AUDIT_READINESS.md) instead for the
+separate commit/tag-freeze process ahead of an external audit.
+
+When `Unreleased` entries are cut into a release, they move under a new
+`## vX.Y.Z — YYYY-MM-DD` heading, which must record the released Wasm's
+SHA-256 (see docs/RELEASING.md § Cutting a release):
+
+```markdown
+## vX.Y.Z — YYYY-MM-DD
+- Wasm SHA-256: `<sha256 of the release build>`
+
+### <function or area name>
+...
+```
 
 ## Why this file exists
 
@@ -33,8 +46,25 @@ Format for an entry:
 
 ## Unreleased
 
-No public-interface changes recorded yet. The first entry here should
-land alongside the first commit of
+### Stellar Wave issue tracking
+- **What:** links the follow-up PR to issues #739, #740, and #741 individually.
+- **Why:** the changes for these issues were merged in PR #816, but editing
+  that merged PR's body did not retroactively close the issues.
+- **Breaking:** no.
+- **PR:** closes #739, #740, and #741 when this follow-up is merged.
+
+### Time units and event schema
+- **What:** made the withdrawal cooldown's ledger field and selected
+  cooldown/vesting arguments unit-explicit, clarified timestamp-only metadata,
+  documented the time-unit inventory, and added a typed deposit event.
+- **Why:** distinguish ledger counts from Unix timestamp seconds. The deposit
+  event retains its existing name, topic order, and positional payload while
+  exposing a typed schema.
+- **Breaking:** generated field/argument names change for the explicitly
+  renamed values; the event's wire encoding is unchanged.
+- **PR:** references #739, #740, and #741.
+
+This entry should land alongside the first commit of
 `interface-spec/VaultContract.json` (see
 [docs/INTERFACE_SPEC.md § One-time setup](./docs/INTERFACE_SPEC.md#one-time-setup) —
 that initial snapshot establishes the baseline rather than describing a

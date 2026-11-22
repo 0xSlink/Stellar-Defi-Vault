@@ -1183,14 +1183,17 @@ pub fn set_open_proposal_count(env: &Env, count: u32) {
         .set(&symbol_short!("prop_opn"), &count);
 }
 
+/// Read a proposal, normalizing any stored version (or the pre-versioning bare
+/// struct) to the latest in-memory form. See `crate::versioned`.
 pub fn get_proposal(env: &Env, id: u32) -> Option<GovernanceProposal> {
     let key = (Symbol::new(env, "prop"), id);
-    env.storage().persistent().get(&key)
+    crate::versioned::read_proposal(env, &key)
 }
 
+/// Write a proposal in the newest versioned storage form.
 pub fn set_proposal(env: &Env, id: u32, proposal: &GovernanceProposal) {
     let key = (Symbol::new(env, "prop"), id);
-    env.storage().persistent().set(&key, proposal);
+    crate::versioned::write_proposal(env, &key, proposal);
 }
 
 pub fn has_voted(env: &Env, proposal_id: u32, voter: &Address) -> bool {
@@ -1253,17 +1256,24 @@ pub fn set_bridge_enabled(env: &Env, enabled: bool) {
 
 // ── Issue #209: additive split positions ─────────────────────────────────────
 
+/// Read a user's split positions, normalizing every entry to the latest
+/// in-memory form. See `crate::versioned`.
 pub fn get_split_positions(env: &Env, user: &Address) -> Vec<StakePosition> {
+    let key = (Symbol::new(env, "splitpos"), user.clone());
+    let raw: Vec<soroban_sdk::Val> = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or(Vec::new(env));
+    crate::versioned::decode_positions(env, raw)
+}
+
+/// Write a user's split positions in the newest versioned storage form.
+pub fn set_split_positions(env: &Env, user: &Address, positions: &Vec<StakePosition>) {
     let key = (Symbol::new(env, "splitpos"), user.clone());
     env.storage()
         .persistent()
-        .get(&key)
-        .unwrap_or(Vec::new(env))
-}
-
-pub fn set_split_positions(env: &Env, user: &Address, positions: &Vec<StakePosition>) {
-    let key = (Symbol::new(env, "splitpos"), user.clone());
-    env.storage().persistent().set(&key, positions);
+        .set(&key, &crate::versioned::encode_positions(env, positions));
 }
 
 // ── Issue #205: DEX router used by swap_and_stake ────────────────────────────
@@ -1784,13 +1794,13 @@ pub fn halving_adjusted_rate(env: &Env, base_rate_bps: u32, ledger: u32) -> i128
     match get_halving_config(env) {
         Some(config) => {
             let count = halving_count_at(env, ledger);
-            let keep_bps = 10_000i128 - get_halving_reduction_bps(env) as i128;
+            let keep_bps = crate::constants::BPS_DENOMINATOR - get_halving_reduction_bps(env) as i128;
             let mut effective = base_rate_bps as i128;
             let mut applied = 0u32;
             // Stops as soon as the floor is reached, so the loop is bounded by
             // the rate itself rather than by the number of elapsed intervals.
             while applied < count && effective > config.floor_rate_bps {
-                effective = effective * keep_bps / 10_000;
+                effective = effective * keep_bps / crate::constants::BPS_DENOMINATOR;
                 applied += 1;
             }
             effective.max(config.floor_rate_bps)
