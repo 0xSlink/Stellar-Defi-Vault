@@ -3136,8 +3136,9 @@ impl VaultContract {
         Ok(())
     }
 
-    fn effective_rate_bps_for_window(env: &Env, start_ledger: u32, end_ledger: u32) -> u32 {
-        let base_rate = balance::get_reward_rate_bps(env);
+    fn effective_rate_bps_for_window(env: &Env, user: &Address, start_ledger: u32, end_ledger: u32) -> u32 {
+        let current_shares = balance::get_shares(env, user);
+        let base_rate = balance::get_effective_rate(env, current_shares);
         if end_ledger <= start_ledger {
             return base_rate;
         }
@@ -4992,17 +4993,23 @@ impl VaultContract {
             .instance()
             .get(&DataKey::EarlyExitPenaltyBps)
             .unwrap_or(0);
+        // Issue #827: early unlock penalty (declining penalty for exiting before lock expires)
+        let early_unlock_penalty_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&symbol_short!("early_ublk"))
+            .unwrap_or(0);
 
         let current_ledger = env.ledger().sequence();
+        let staked_at = env
+            .storage()
+            .persistent()
+            .get::<_, u32>(&DataKey::StakedAtLedger(staker.clone()));
         let is_locked = if lock_period == 0 {
             false
         } else {
-            match env
-                .storage()
-                .persistent()
-                .get::<_, u32>(&DataKey::StakedAtLedger(staker.clone()))
-            {
-                Some(staked_at) => current_ledger < staked_at.saturating_add(lock_period),
+            match staked_at {
+                Some(staked_at_ledger) => current_ledger < staked_at_ledger.saturating_add(lock_period),
                 None => false,
             }
         };
@@ -5010,16 +5017,61 @@ impl VaultContract {
         // Issue #41: restaked positions are exempt from early-exit penalty for one unstake cycle
         // Issue #41: restaked positions are exempt from early-exit penalty for one unstake cycle
         let is_restaked = balance::is_restaked(env, staker);
-        let amount_after_penalty = if is_restaked || !is_locked || penalty_bps == 0 {
+
+        // Issue #827: compute post-penalty amount considering both lock penalty and early unlock penalty
+        // Lock penalty (EarlyExitPenaltyBps) applies if still locked
+        // Early unlock penalty (early_ublk) applies if before lock expires
+        let is_still_locked = lock_period > 0 && is_locked;
+        let is_early_unlock = lock_period > 0 && current_ledger < staked_at.saturating_add(lock_period);
+
+        let amount_after_penalty = if is_restaked || !is_still_locked && !is_early_unlock {
+            // No penalty applies
             amount
         } else {
-            let penalty = amount
-                .checked_mul(penalty_bps as i128)
-                .ok_or(VaultError::ArithmeticError)?
-                .checked_div(BOOST_BPS_BASE as i128)
-                .ok_or(VaultError::ArithmeticError)?;
-            amount - penalty
+            // Apply the applicable penalty
+            let (penalty_bps_to_use, early_ublk_bps_to_use) = if is_early_unlock && is_still_locked {
+                // Both penalties could apply; combine them proportionally
+                // For simplicity: early unlock takes precedence if before lock expiry
+                (0, early_unlock_penalty_bps)
+            } else if is_early_unlock {
+                (0, early_unlock_penalty_bps)
+            } else if is_still_locked {
+                (penalty_bps, 0)
+            } else {
+                (0, 0)
+            };
+
+            let mut post_penalty = amount;
+            if penalty_bps_to_use > 0 {
+                let penalty = amount
+                    .checked_mul(penalty_bps_to_use as i128)
+                    .ok_or(VaultError::ArithmeticError)?
+                    .checked_div(BOOST_BPS_BASE as i128)
+                    .ok_or(VaultError::ArithmeticError)?;
+                post_penalty = amount - penalty;
+            }
+            if early_ublk_bps_to_use > 0 {
+                let early_penalty = post_penalty
+                    .checked_mul(early_ublk_bps_to_use as i128)
+                    .ok_or(VaultError::ArithmeticError)?
+                    .checked_div(BOOST_BPS_BASE as i128)
+                    .ok_or(VaultError::ArithmeticError)?;
+                post_penalty = post_penalty - early_penalty;
+            }
+            // Distribute the forfeited amount to the reward pool (Issue #826)
+            if early_ublk_bps_to_use > 0 || penalty_bps_to_use > 0 {
+                // Calculate forfeited amount: the total penalty collected
+                let forfeited = amount
+                    .checked_sub(post_penalty)
+                    .ok_or(VaultError::ArithmeticError)?;
+                if forfeited > 0 {
+                    balance::distribute_forfeit(env, forfeited);
+                }
+            }
+            post_penalty
         };
+
+        // ... rest of the function continues
 
         // Unstake fee: charged on the post-penalty amount returned to the user
         // and routed to the reward pool treasury (not burned). Applied after the
@@ -5213,6 +5265,11 @@ impl VaultContract {
     }
 
     fn accrue_rewards(env: &Env, user: &Address, current_shares: i128) -> Result<(), VaultError> {
+        // Issue #829: reward-excluded addresses do not accrue rewards
+        if balance::get_reward_excluded(env, user) {
+            balance::set_reward_checkpoint_ledger(env, user, env.ledger().sequence());
+            return Ok(());
+        }
         let current_ledger = env.ledger().sequence();
         let is_epoch_mode = env
             .storage()
@@ -5325,7 +5382,7 @@ impl VaultContract {
         // end_ledger), correctly handling a bootstrap window that only
         // partially overlaps this range (falls back to the plain
         // reward_rate_bps() when no bootstrap is configured).
-        let base_rate = Self::effective_rate_bps_for_window(env, start_ledger, end_ledger);
+        let base_rate = Self::effective_rate_bps_for_window(env, user, start_ledger, end_ledger);
         if base_rate == 0 {
             return Ok(0);
         }
