@@ -339,6 +339,8 @@ jobs:
       # `missing_docs` is tracked by the `docs` job below while the backlog is
       # worked through (#675); keep it out of clippy's -D warnings until then.
       - run: cargo clippy --all-targets -- -D warnings -A missing_docs
+      - name: Check symbol_short literals
+        run: python3 scripts/check_symbol_short.py
 
   docs:
     name: Rustdoc

@@ -1,6 +1,6 @@
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token, Address, Bytes,
-    Env, String, Symbol, Vec,
+    Env, IntoVal, String, Symbol, Val, Vec,
 };
 
 use crate::{
@@ -1037,6 +1037,9 @@ impl VaultContract {
         balance::set_total_shares(&env, total_shares - shares);
         balance::set_total_deposited(&env, total_deposited - amount_returned);
         balance::set_accrued_reward(&env, &user, 0);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::StakedAtLedger(user.clone()));
         events::emergency_withdrawal(
             &env,
             &user,
@@ -8018,6 +8021,20 @@ impl VaultContract {
     /// emits the `claimed` event. Does NOT call `require_auth` — callers are
     /// responsible for gating access.
     fn do_claim(env: &Env, staker: &Address) -> Result<i128, VaultError> {
+        Self::do_claim_to(env, staker, staker)
+    }
+
+    /// Core claim logic that routes a payout to `destination`.
+    ///
+    /// Native Soroban argument auth is used by `claim_with_signature`; no
+    /// custom ed25519 signature bytes or registered ed25519-key verification
+    /// are needed because Soroban binds this invocation's typed arguments to
+    /// the user's account authorization entry.
+    fn do_claim_to(
+        env: &Env,
+        staker: &Address,
+        destination: &Address,
+    ) -> Result<i128, VaultError> {
         Self::require_not_paused(env, crate::pause_mask::PAUSE_CLAIM)?;
         Self::maybe_emit_position_expired(env, staker);
         let is_epoch_mode = env
@@ -8167,7 +8184,7 @@ impl VaultContract {
             && !Self::try_auto_convert_reward(env, staker, &token_addr, payout)?
         {
             let token_client = token::Client::new(env, &token_addr);
-            token_client.transfer(&env.current_contract_address(), staker, &payout);
+            token_client.transfer(&env.current_contract_address(), destination, &payout);
         }
 
         balance::set_reward_pool_balance(env, reward_pool - reward + loan_repayment);
@@ -9157,6 +9174,23 @@ impl VaultContract {
             .get(&DataKey::FirstStakedAt(user))
     }
 
+    /// Age of the user's current staking position in ledgers.
+    ///
+    /// Returns `0` before a position has opened or after it has fully exited.
+    /// Partial withdrawals do not reset the age. A redeposit after a full exit
+    /// starts a new current-position age, while `staker_joined_at` remains the
+    /// write-once lifetime first-deposit ledger.
+    pub fn get_position_age(env: Env, user: Address) -> u32 {
+        let first_deposit_ledger: Option<u32> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::StakedAtLedger(user));
+        match first_deposit_ledger {
+            Some(ledger) => env.ledger().sequence().saturating_sub(ledger),
+            None => 0,
+        }
+    }
+
     // ── Issue #98: can_unstake pre-flight check ────────────────────────────────
 
     /// Read-only pre-flight check that simulates whether an unstake of the given
@@ -9664,6 +9698,62 @@ impl VaultContract {
         }
 
         let reward = Self::do_claim(&env, &user)?;
+        events::claimed_on_behalf(&env, &relayer, &user, reward);
+        Ok(reward)
+    }
+
+    /// Submit a user's signed claim intent as a relayed transaction.
+    ///
+    /// The authorization is native Soroban auth-entry authorization, not a
+    /// custom ed25519 signature. The typed argument vector is:
+    /// `(contract, user, destination, max_amount, nonce, deadline)`.
+    pub fn claim_with_signature(
+        env: Env,
+        relayer: Address,
+        user: Address,
+        destination: Address,
+        max_amount: i128,
+        nonce: u64,
+        deadline: u32,
+    ) -> Result<i128, VaultError> {
+        relayer.require_auth();
+
+        if deadline < env.ledger().sequence() {
+            return Err(VaultError::ClaimDeadlineExpired);
+        }
+        if max_amount <= 0 {
+            return Err(VaultError::ZeroAmount);
+        }
+
+        let nonce_key = (symbol_short!("cl_nonce"), user.clone());
+        let expected_nonce: u64 = env
+            .storage()
+            .persistent()
+            .get(&nonce_key)
+            .unwrap_or(0);
+        if nonce != expected_nonce {
+            return Err(VaultError::NonceMismatch);
+        }
+
+        crate::withdrawal_allowlist::require_destination_allowed(&env, &user, &destination)?;
+
+        let mut args: Vec<Val> = Vec::new(&env);
+        args.push_back(env.current_contract_address().into_val(&env));
+        args.push_back(user.into_val(&env));
+        args.push_back(destination.into_val(&env));
+        args.push_back(max_amount.into_val(&env));
+        args.push_back(nonce.into_val(&env));
+        args.push_back(deadline.into_val(&env));
+        user.require_auth_for_args(&args);
+
+        let reward = Self::do_claim_to(&env, &user, &destination)?;
+        if reward > max_amount {
+            return Err(VaultError::ClaimAmountExceeded);
+        }
+
+        env.storage()
+            .persistent()
+            .set(&nonce_key, &(nonce.checked_add(1).ok_or(VaultError::ArithmeticError)?));
         events::claimed_on_behalf(&env, &relayer, &user, reward);
         Ok(reward)
     }
