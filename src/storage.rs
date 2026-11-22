@@ -216,6 +216,8 @@ pub enum DataKey {
     EpochLedgers,
     EpochRewardPerEpoch,
     EpochRewardFactor(u32),
+    // Issue #829: reward-excluded addresses
+    RewardExcluded(Address),
     // NOTE: DataKey is already at Soroban's 50-variant cap for
     // #[contracttype] enums (ScSpecUdtUnionV0::cases is VecM<_, 50> in
     // stellar-xdr) — adding a 51st variant makes the #[contracttype] derive
