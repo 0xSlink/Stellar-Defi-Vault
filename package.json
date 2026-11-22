@@ -3,6 +3,7 @@
   "private": true,
   "scripts": {
     "watch-events": "tsx scripts/watch-events.ts",
+    "invariant-sweep": "tsx scripts/invariant-sweep.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
