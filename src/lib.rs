@@ -9,6 +9,9 @@
 // contract must not. Forbidding it crate-wide also keeps unsafe blocks out of
 // the test-only code that shares this crate.
 #![forbid(unsafe_code)]
+// Issue #922: contract code must use typed error handling. Test code is excluded
+// because test helpers may deliberately exercise panic behavior.
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing))]
 // Issue #675: every public item should be documented. Left at `warn` while the
 // existing ~1,000 undocumented items are worked through; flip to `deny` once
 // `cargo doc` is clean.
