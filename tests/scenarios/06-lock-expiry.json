@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "name": "lock expiry",
+  "steps": [
+    { "action": "deposit", "actor": "alice", "args": { "amount": 1000 } },
+    { "action": "lock", "actor": "alice", "args": { "duration_ledgers": 10 } },
+    { "action": "claim", "actor": "alice", "ledger_advance": 10 }
+  ],
+  "expected": [
+    { "type": "lock_active", "actor": "alice", "equals": false },
+    { "type": "last_result", "equals": 0 }
+  ]
+}

@@ -178,6 +178,14 @@ pub enum VaultError {
 }
 
 impl VaultError {
+    /// A signed claim deadline has elapsed.
+    pub const ClaimDeadlineExpired: VaultError = VaultError::EpochNotFinalized;
+    /// A claim nonce was already consumed or does not match the next nonce.
+    pub const NonceMismatch: VaultError = VaultError::InvalidHashLength;
+    /// A claim payout destination differs from the signed destination.
+    pub const WrongClaimDestination: VaultError = VaultError::InvalidAddress;
+    /// The actual claim payout exceeds the signed maximum amount.
+    pub const ClaimAmountExceeded: VaultError = VaultError::InsufficientRewardPool;
     /// Backwards compatibility alias for the former error name at discriminant 48.
     #[allow(non_upper_case_globals)]
     pub const InvalidRewardAmount: VaultError = VaultError::InvalidHashLength;

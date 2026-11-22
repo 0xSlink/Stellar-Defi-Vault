@@ -26,6 +26,14 @@ committed golden file `test-data/storage_layout.snapshot`.
 Add a row whenever a new core type is introduced; the point is to cover the
 types whose encoding the accounting and per-user state depend on.
 
+## Legacy key audit (issue #924)
+
+The legacy `DataKey` still has exactly 50 variants. A source-reference audit
+found every variant used by contract code outside its compatibility
+`to_storage_key()` mapping, so no variant was dead and none was removed. The
+legacy enum and its on-disk encodings therefore remain unchanged; the existing
+snapshot is not regenerated for this audit.
+
 ## Running
 
 ```bash
