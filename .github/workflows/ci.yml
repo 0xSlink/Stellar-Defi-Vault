@@ -470,3 +470,11 @@ jobs:
             **/*.sarif
             scout.*
           if-no-files-found: warn
+
+  traceability:
+    name: Threat Model Traceability
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify referenced tests in docs/TRACEABILITY.md exist
+        run: python3 scripts/check-traceability.py
