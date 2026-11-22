@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "name": "multiple depositors",
+  "steps": [
+    { "action": "deposit", "actor": "alice", "args": { "amount": 1200 } },
+    { "action": "deposit", "actor": "bob", "args": { "amount": 800 } }
+  ],
+  "expected": [
+    { "type": "shares", "actor": "alice", "equals": 1200 },
+    { "type": "shares", "actor": "bob", "equals": 800 },
+    { "type": "total_shares", "equals": 2000 }
+  ]
+}

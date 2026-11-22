@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Stellar DeFi Vault — Example Deposit (Optional Fee-Bump Mode)</title>
+  </head>
+  <body>
+    <main>
+      <h1>Stellar DeFi Vault — Deposit</h1>
+      <form id="deposit-form">
+        <label>
+          Contract ID
+          <input id="contract-id" type="text" placeholder="C..." required />
+        </label>
+        <label>
+          Amount (stroops)
+          <input id="amount" type="number" min="1" value="10000000" required />
+        </label>
+        <label>
+          <input id="sponsor-mode-toggle" type="checkbox" />
+          Sponsor fees via Fee-Bump Relayer (0 XLM required)
+        </label>
+        <label id="sponsor-url-row" style="display: none">
+          Sponsor Relayer URL
+          <input id="sponsor-url" type="url" placeholder="https://relayer.example/sponsor" />
+        </label>
+        <button type="submit">Deposit</button>
+      </form>
+      <pre id="status"></pre>
+    </main>
+    <script>
+      const toggle = document.getElementById("sponsor-mode-toggle");
+      const sponsorRow = document.getElementById("sponsor-url-row");
+      toggle.addEventListener("change", () => {
+        sponsorRow.style.display = toggle.checked ? "block" : "none";
+      });
+    </script>
+  </body>
+</html>

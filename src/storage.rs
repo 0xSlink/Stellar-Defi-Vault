@@ -1,4 +1,151 @@
-use soroban_sdk::{contracttype, Address, String, Vec};
+/// Maximum admin-configurable rate-limit window stored in temporary state.
+/// Kept below Soroban's protocol maximum entry TTL; used where configuration
+/// can be lengthened after a stamp or usage record is written.
+pub(crate) const MAX_TEMPORARY_RATE_LIMIT_TTL: u32 = 5_000_000;
+
+use soroban_sdk::{contracttype, Address, String, Vec, Env, Symbol, symbol_short};
+
+/// Consolidated per-user settings (issue #796).
+///
+/// Stores all user preferences in a single storage entry to reduce rent costs.
+/// Uses versioned-enum pattern so new settings can be added later.
+///
+/// - `version`: struct version for future migrations
+/// - `claim_destination`: address to receive claimed rewards (None = self)
+/// - `auto_compound`: whether to automatically compound rewards
+/// - `keepers`: list of addresses authorized to act on behalf of user
+/// - `notifications_enabled`: whether user wants notifications
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct UserSettings {
+    pub version: u32,
+    pub claim_destination: Option<Address>,
+    pub auto_compound: bool,
+    pub keepers: Vec<Address>,
+    pub notifications_enabled: bool,
+}
+
+impl UserSettings {
+    /// Create default settings for a new user.
+    pub fn default() -> Self {
+        Self {
+            version: 1,
+            claim_destination: None,
+            auto_compound: false,
+            keepers: Vec::new(&soroban_sdk::Env::default()),
+            notifications_enabled: true,
+        }
+    }
+}
+
+/// Storage keys for all persistent and instance state in the vault.
+///
+/// Instance keys (fast, small): Admin, Token, TotalShares, TotalDeposited,
+/// MinStake, RewardRateBps, RewardPoolBalance, BoostSchedule, Paused,
+/// WithdrawalLimit, LockPeriod, EarlyExitPenaltyBps, TotalStakers,
+/// TotalRewardsPaid, WhitelistEnabled, CooldownPeriod,
+/// UnstakeFeeBps, AllStakers, InactivityThreshold, Changelog,
+/// LastRateChangeLedger, InitializedAtLedger.
+///
+/// Persistent keys (per-user, long-lived): ShareBalance, StakeHistory,
+/// RewardCheckpointLedger, LastClaimLedger, AccruedReward, StakedAtLedger,
+/// Delegate, Whitelisted, UnbondingPosition, UserClaimWindow, FrozenAt,
+/// VestingEntries.
+/// Domain sub-enum for administrator and protocol-wide configuration keys (Issue #646).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AdminKey {
+    Admin,
+    PendingAdmin,
+    EmergencyAdmin,
+    AdminRenounced,
+    Deployer,
+    SlashTreasury,
+    Token,
+    TotalShares,
+    TotalDeposited,
+    MinStake,
+    Paused,
+    WithdrawalLimit,
+    LockPeriod,
+    EarlyExitPenaltyBps,
+    TotalStakers,
+    CooldownPeriod,
+    UnstakeFeeBps,
+}
+
+/// Domain sub-enum for staker positions, delegation, and user-specific accounting (Issue #646).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PositionKey {
+    ShareBalance(Address),
+    StakeHistory(Address),
+    StakedAtLedger(Address),
+    LastUnstakeLedger(Address),
+    UnbondingPosition(Address),
+    FrozenAt(Address),
+    FirstStakedAt(Address),
+    Restaked(Address),
+    Delegate(Address),
+    RewardCheckpointLedger(Address),
+    LastClaimLedger(Address),
+    AccruedReward(Address),
+    RewardRemainder(Address),
+    UserClaimWindow(Address),
+    VestingEntries(Address),
+    RewardAccumulatorCheckpoint(Address),
+}
+
+/// Domain sub-enum for reward distribution, emissions, and boost campaigns (Issue #646).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RewardKey {
+    RewardRateBps,
+    RewardPoolBalance,
+    RewardToken,
+    TotalRewardsPaid,
+    TotalEverClaimed,
+    RateHistory,
+    BoostSchedule,
+    BoostCampaign,
+    VestingPeriod,
+    EpochMode,
+    CurrentEpoch,
+    EpochLedgers,
+    EpochRewardPerEpoch,
+    EpochRewardFactor(u32),
+    GlobalRewardIndex,
+    LastAccumulatorLedger,
+}
+
+/// Domain sub-enum for governance, access control, and pool lifecycle (Issue #646).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum GovernanceKey {
+    WhitelistEnabled,
+    Whitelisted(Address),
+    AllStakers,
+    Leaderboard,
+    LeaderboardSize,
+    InactivityThreshold,
+    KycRequired,
+    KycApproved(Address),
+    Stopped,
+    ShuttingDown,
+}
+
+/// Top-level key enum wrapping namespaced domain sub-enums (Issue #646).
+///
+/// This removes Soroban's 50-variant limit on a single `#[contracttype]` enum
+/// by dividing keys into domain-specific sub-enums while preserving type safety.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum StorageKey {
+    Admin(AdminKey),
+    Position(PositionKey),
+    Reward(RewardKey),
+    Governance(GovernanceKey),
+}
 
 /// Storage keys for all persistent and instance state in the vault.
 ///
@@ -79,6 +226,12 @@ pub enum DataKey {
     // matching the pattern already established here for the same reason
     // (e.g. symbol_short!("pool_cp"), symbol_short!("sl_tr"), the
     // Symbol::new(env, "prop")/"voted" tuple keys above).
+    // Issues #822-#825: new features
+    // Issue #822: exact-output variants
+    // Issue #823: transaction deadline
+    // Issue #824: third-party submission
+    // Issue #825: streaming reward funding
+    PriorityFee,
 }
 
 /// Storage key for an individual epoch snapshot.
@@ -141,6 +294,13 @@ pub struct PoolStats {
     pub total_rewards_paid: i128,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RewardTier {
+    pub max_amount: i128,
+    pub rate_bps: i128,
+}
+
 /// Aggregate user stats used by `user_stats`.
 ///
 /// - `position_amount`: the user's current position size expressed in token units.
@@ -154,6 +314,36 @@ pub struct UserStats {
     pub pending_reward: i128,
     pub staked_at_ledger: u32,
     pub last_claim_ledger: u32,
+}
+
+/// Matching program configuration (issue #242).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct MatchingProgram {
+    pub match_rate_bps: u32,
+    pub per_user_cap: i128,
+    pub total_budget: i128,
+    pub budget_used: i128,
+    pub active: bool,
+}
+
+/// Per-user matching stats (issue #242).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct UserMatchingStats {
+    pub total_matched: i128,
+}
+
+/// Cohort statistics for weekly staker cohorts.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct CohortStats {
+    pub cohort_id: u32,
+    pub member_count: u32,
+    pub total_staked: i128,
+    pub avg_position: i128,
+    pub total_rewards_claimed: i128,
+    pub active_members: u32,
 }
 
 /// Active boost campaign set by admin (#48).
@@ -274,6 +464,18 @@ pub struct ChangelogEntry {
     pub new_value: i128,
 }
 
+/// One entry in the on-chain reward-rate changelog exposed by
+/// `get_rate_history` (issue #522).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RateChange {
+    pub old_rate_bps: u32,
+    pub new_rate_bps: u32,
+    /// Ledger sequence number of the update, matching the timestamp carried by
+    /// the `rate_changed` event.
+    pub changed_at: u32,
+}
+
 /// One entry in the rich reward-rate history exposed by `get_reward_rate_history` (issue #124).
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -284,12 +486,32 @@ pub struct RateHistoryEntry {
     pub changed_by: Address,
 }
 
-/// Accumulated referral stats stored per referrer.
+/// Accumulated referral stats stored per referrer (issue #757).
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReferralStats {
-    pub total_referred_stake: i128,
-    pub referral_count: u32,
+    pub referee_count: u32,
+    pub total_referred_deposits: i128,
+    pub earned: i128,
+    pub claimed: i128,
+}
+
+/// Receipt for a cast governance vote (issue #760).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct VoteReceipt {
+    pub support: bool,
+    pub weight: i128,
+    pub ledger: u32,
+}
+
+/// Vote-escrow style reward boost lock (issue #758).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct VeBoostLock {
+    pub amount: i128,
+    pub unlock_ledger: u32,
+    pub duration_ledgers: u32,
 }
 
 /// Result of `get_boost_tier_progress` showing where a user is toward the next boost tier.
@@ -325,6 +547,23 @@ pub struct PoolHealthReport {
     pub uptime_ledgers: u32,
     pub estimated_daily_obligations: i128,
     pub is_solvent_7_days: bool,
+}
+
+/// Admin-only operational snapshot for monitoring and alerting dashboards.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct OperatorDashboard {
+    pub pool_health: PoolHealthReport,
+    pub staker_count: u32,
+    pub inactive_staker_count: u32,
+    pub pending_exit_queue_count: u32,
+    pub total_ever_staked: i128,
+    pub total_ever_claimed: i128,
+    pub largest_position: i128,
+    pub smallest_active_position: i128,
+    pub sunset_state: SunsetState,
+    pub open_governance_proposals: u32,
+    pub reward_token_runway_days: u32,
 }
 
 /// Effective reward rate breakdown returned by `reward_multiplier_preview` (issue #181).
@@ -524,6 +763,33 @@ pub enum RoundingPolicy {
     Ceiling,
     Nearest,
 }
+// ── Issue #220: rounding dust handling ────────────────────────────────────────
+
+use crate::errors::VaultSafetyError;
+
+/// Storage key for accumulated rounding dust (issue #220).
+pub const ROUNDING_DUST_KEY: Symbol = symbol_short!("rounding_dust");
+
+/// Retrieve the current rounding dust amount (0 if none).
+pub fn get_rounding_dust(env: &Env) -> i128 {
+    env.storage().instance().get(&ROUNDING_DUST_KEY).unwrap_or(0)
+}
+
+/// Add amount to rounding dust counter (checked arithmetic).
+pub fn add_rounding_dust(env: &Env, amount: i128) -> Result<(), VaultSafetyError> {
+    let cur = get_rounding_dust(env);
+    let new = cur.checked_add(amount).ok_or(VaultSafetyError::ArithmeticError)?;
+    env.storage().instance().set(&ROUNDING_DUST_KEY, &new);
+    Ok(())
+}
+
+/// Sweep accumulated rounding dust into reward pool, clearing the counter.
+pub fn sweep_rounding_dust(env: &Env) -> Result<i128, VaultSafetyError> {
+    let dust = get_rounding_dust(env);
+    env.storage().instance().remove(&ROUNDING_DUST_KEY);
+    Ok(dust)
+}
+
 
 // ── Issue #216: governance voting ────────────────────────────────────────────
 
@@ -537,11 +803,35 @@ pub enum ProposableParam {
     MinStake,
 }
 
+/// How vote weight is computed for a governance proposal.
+///
+/// The mode is **snapshotted at proposal-creation time** so that a mid-vote
+/// mode change by the admin cannot alter the weighting rules of an already-open
+/// proposal.
+///
+/// # Quadratic weighting caveat
+///
+/// Quadratic weighting reduces whale dominance: a holder with 10 000 tokens
+/// gets `sqrt(10 000) = 100` weight instead of 10 000.  However, it is easy
+/// to bypass by splitting stake across multiple wallets, so meaningful
+/// protection requires a complementary identity/sybil-resistance layer
+/// (e.g. the existing KYC or proof-of-humanity hook).  Use with awareness.
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum VoteWeightMode {
+    /// Weight = staked token amount.  This is the default.
+    Linear,
+    /// Weight = integer square root of staked token amount.
+    /// Rounds down; a position worth 0 still has 0 weight.
+    Quadratic,
+}
+
 /// A governance proposal to change a pool parameter, created via
 /// `create_proposal` and resolved via `enact_proposal` (issue #216).
 ///
 /// Voting power is the staker's token amount at the time of the `vote` call,
 /// not adjusted retroactively if the staker's position changes afterward.
+/// The `weight_mode` is fixed at creation time from the pool-wide setting.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct GovernanceProposal {
@@ -552,6 +842,9 @@ pub struct GovernanceProposal {
     pub votes_against: i128,
     pub ends_at: u32,
     pub enacted: bool,
+    /// Weighting mode active when this proposal was created.
+    /// Immutable after creation so mode changes don't affect open proposals.
+    pub weight_mode: VoteWeightMode,
 }
 
 // ── Issue #207: cross-chain bridge relayer hook ──────────────────────────────
@@ -823,3 +1116,595 @@ pub struct AuctionBid {
     pub amount: i128,
     pub placed_at: u32,
 }
+
+// ── Issue #239: stake-weighted lottery ────────────────────────────────────────
+
+/// A prize pool funded by the admin and drawn among active stakers, weighted
+/// by their staked amount (issue #239).
+///
+/// `winner` uses `Vec<Address>` (0 or 1 elements) rather than `Option<Address>`
+/// since `Option<Address>` is not usable inside a `#[contracttype]` struct in
+/// soroban-sdk 21.x testutils mode (same constraint noted on `UserSummary`
+/// and `ReferralTreeNode` above).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct LotteryConfig {
+    pub prize_amount: i128,
+    pub draw_at_ledger: u32,
+    pub drawn: bool,
+    pub winner: Vec<Address>,
+}
+
+// ── Issue #238: loyalty milestone badges ──────────────────────────────────────
+
+/// The staker metric a milestone is evaluated against (issue #238).
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum MilestoneCondition {
+    StakeDurationLedgers,
+    TotalStakedAmount,
+    ClaimCount,
+    TotalRewardsClaimed,
+}
+
+/// An admin-configured staking achievement. Evaluated lazily by
+/// `check_milestones()`, which records a non-transferable badge in
+/// `UserMilestones` the first time a staker crosses `threshold` (issue #238).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Milestone {
+    pub id: u32,
+    pub name: String,
+    pub condition_type: MilestoneCondition,
+    pub threshold: i128,
+}
+
+/// A single entry in the achievement leaderboard (issue #173 extension).
+///
+/// - `user`: the staker's address.
+/// - `milestone_count`: number of milestones achieved by this staker.
+/// - `latest_achievement_ledger`: most recent ledger when a milestone was achieved.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct AchievementLeaderboardEntry {
+    pub user: Address,
+    pub milestone_count: u32,
+    pub latest_achievement_ledger: u32,
+}
+
+// ── Issue #240: oracle-triggered lock-up release ──────────────────────────────
+
+/// Direction the oracle price must move relative to `trigger_price` to
+/// satisfy a `PriceCondition` (issue #240).
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum TriggerDirection {
+    Below,
+    Above,
+}
+
+/// A user-configured price condition that, once satisfied, waives their
+/// position's early-exit lock-up penalty (issue #240).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PriceCondition {
+    pub trigger_price: i128,
+    pub asset_id: String,
+    pub direction: TriggerDirection,
+}
+
+// ── Issue #250: optimal claim frequency advisory ───────────────────────────────
+
+/// Advisory result from `get_optimal_claim_frequency()` (issue #250). Every
+/// field is an approximation at the current reward rate/boost/campaign — see
+/// that function's doc comment for the exact assumptions.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct OptimalClaimAdvice {
+    pub recommended_interval_ledgers: u32,
+    pub recommended_interval_days: u32,
+    /// Estimated annual reward gain from compounding at
+    /// `recommended_interval_ledgers` vs. simple (non-compounding) accrual.
+    /// Named `annual_compounding_gain` rather than the longer
+    /// `estimated_annual_gain_from_compounding` — Soroban's contracttype
+    /// struct field names are capped at 30 characters.
+    pub annual_compounding_gain: i128,
+    pub break_even_reward_per_claim: i128,
+}
+
+// ── Issue #257: auto-convert reward on claim ────────────────────────────────────
+
+/// A user's auto-convert-on-claim configuration (issue #257): reward tokens
+/// are swapped to `target_token` via the configured DEX router (issue #205)
+/// on every `claim`, subject to `min_output_bps` slippage protection.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct AutoConvertConfig {
+    pub target_token: Address,
+    pub min_output_bps: u32,
+}
+
+// ── Issue #251: exit-queue priority bidding ─────────────────────────────────────
+
+/// A single recorded call to `bid_for_queue_priority()` (issue #251).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PriorityBidRecord {
+    pub user: Address,
+    pub bid_amount: i128,
+    pub previous_position: u32,
+    pub ledger: u32,
+}
+
+// ── Issue #258: pool whitelabel branding ────────────────────────────────────────
+
+/// Whitelabel identity for the pool, set by the admin via `set_branding()` and
+/// read by frontends via `get_branding()` without any off-chain lookup.
+///
+/// Every field is length-capped (see `MAX_BRANDING_*` in vault.rs); exceeding a
+/// cap reverts with the `VaultBrandError` variant naming that field.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct BrandingConfig {
+    pub display_name: String,
+    pub logo_hash: String,
+    pub website_url: String,
+    pub twitter_handle: String,
+}
+
+// ── Issue #259: staking insurance (principal protection) ────────────────────────
+
+/// Admin-configured insurance product terms (issue #259).
+///
+/// `premium_bps` is the share of every reward claim redirected into the
+/// insurance fund while a policy is active. `max_coverage_per_user` caps the
+/// principal any single policy may cover.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct InsuranceProduct {
+    pub premium_bps: u32,
+    pub max_coverage_per_user: i128,
+}
+
+/// A user's active principal-protection policy (issue #259).
+///
+/// `coverage_amount` is snapshotted from the position at purchase time and is
+/// what `declare_shortfall()` pays out from the insurance fund (issue #141).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct InsurancePolicy {
+    pub premium_bps: u32,
+    pub coverage_amount: i128,
+    pub active_since: u32,
+    pub last_premium_at: u32,
+}
+
+// ── Issue #260: flash stake ─────────────────────────────────────────────────────
+
+/// Permanent on-chain proof that `user` held `amount` at ledger `ledger`,
+/// produced by `flash_stake()` (issue #260).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct FlashStakeReceipt {
+    pub user: Address,
+    pub amount: i128,
+    pub ledger: u32,
+    pub receipt_id: u64,
+}
+
+// ── Issue #261: stake-backed loans ──────────────────────────────────────────────
+
+/// Admin-set borrowing terms (issue #261). `max_ltv_bps` bounds the loan
+/// against the borrower's staked principal; `interest_rate_bps` is a simple
+/// (non-compounding) annual rate accrued per ledger.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoanConfig {
+    pub max_ltv_bps: u32,
+    pub interest_rate_bps: u32,
+}
+
+/// A user's outstanding loan against their staking position (issue #261).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Loan {
+    pub principal: i128,
+    pub interest_accrued: i128,
+    pub opened_at: u32,
+    pub last_interest_at: u32,
+}
+
+// ── Issue #276: seasonal reward multiplier ────────────────────────────────────
+
+/// An admin-configured calendar window during which the reward rate is
+/// multiplied by `multiplier_bps` (issue #276). At most one season may be
+/// active at any given ledger — `add_season()` rejects overlapping ranges.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Season {
+    pub name: String,
+    pub starts_at: u32,
+    pub ends_at: u32,
+    pub multiplier_bps: u32,
+}
+
+// ── Issue #298: pool sunsetting workflow ──────────────────────────────────────
+
+/// Lifecycle stage of a pool being formally deprecated (issue #298).
+/// Transitions are one-way: `Active` -> `SunsetAnnounced` -> `GracePeriodActive`
+/// -> `ForceResolutionActive` -> `Closed`.
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum SunsetState {
+    Active,
+    SunsetAnnounced,
+    GracePeriodActive,
+    ForceResolutionActive,
+    Closed,
+}
+
+// ── Issue #286: debt NFT collateral ─────────────────────────────────────────
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DebtNFT {
+    pub id: u32,
+    pub issuer: Address,
+    pub holder: Address,
+    pub face_value: i128,
+    pub expires_at: u32,
+    pub minted_at: u32,
+}
+
+// ── Issue #283: position AMM (atomic position swaps) ─────────────────────────
+
+/// A peer-to-peer swap offer between two stakers (issue #283).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct SwapOffer {
+    pub offerer: Address,
+    pub offered_amount: i128,
+    pub requested_address: Address,
+    pub requested_amount: i128,
+    pub expires_at: u32,
+}
+
+// ── Issue #284: reward prediction market ────────────────────────────────────
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PredictionMarket {
+    pub closes_at: u32,
+    pub target_ledger: u32,
+    pub current_rate_bps: i128,
+    pub bets_higher: i128,
+    pub bets_lower: i128,
+    pub resolved: bool,
+    pub outcome: Option<bool>,
+}
+
+// ── Issue #285: cross-pool yield detector ────────────────────────────────────
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct YieldComparison {
+    pub pool: Address,
+    pub rate_bps: i128,
+    pub reachable: bool,
+    pub is_higher: bool,
+}
+// ── Issue #281: Fee Revenue Sharing ──────────────────────────────────────────
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RevenueSharingConfig {
+    pub governance_token: Address,
+    pub share_bps: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RevenueShareMerkleRoot {
+    pub root: soroban_sdk::Bytes,
+    pub epoch: u32,
+    pub total_amount: i128,
+}
+
+// ── Issue #282: Stake-Gated Access ───────────────────────────────────────────
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct AccessTier {
+    pub min_stake: i128,
+    pub min_duration_ledgers: u32,
+    pub access_token_contract: Address,
+}
+
+// ── Issue #314: withdrawal receipt ───────────────────────────────────────────
+
+/// Immutable on-chain proof of an unstake operation (issue #314).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct WithdrawalReceipt {
+    pub receipt_id: u64,
+    pub user: Address,
+    pub amount_returned: i128,
+    pub rewards_claimed: i128,
+    pub unstaked_at: u32,
+    pub lock_penalty_paid: i128,
+}
+
+/// Tracks completion of recommended onboarding steps for a staker.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ── Issue #105: stake/unstake history ────────────────────────────────────────
+
+
+
+// ── Issue #104: interface detection ──────────────────────────────────────────
+
+
+
+
+
+
+
+
+
+// ── Issue #219: pause reason ─────────────────────────────────────────────────
+
+
+
+// ── Issue #217: tax reporting ────────────────────────────────────────────────
+
+
+// ── Issue #220: rounding policy ──────────────────────────────────────────────
+
+
+// ── Issue #216: governance voting ────────────────────────────────────────────
+
+
+
+// ── Issue #207: cross-chain bridge relayer hook ──────────────────────────────
+
+
+// ── Issue #197: fee splitting ─────────────────────────────────────────────────
+
+
+// ── Issue #195: timelocked admin actions ─────────────────────────────────────
+
+
+// ── Issue #196: multi-sig admin ──────────────────────────────────────────────
+
+
+
+// ── Missing types for existing feature branches ──────────────────────────────
+
+
+
+
+
+// ── Issue #210: Merkle Reward Distribution ────────────────────────────────────
+
+
+// ── Issue #231: Halving Schedule ──────────────────────────────────────────────
+
+
+// ── Issue #222: Staking Certificate ───────────────────────────────────────────
+
+
+// ── Issue #211: Staking Tournament Competition ─────────────────────────────────
+
+
+// ── Issue #221: Cross-Pool Reward Comparison ──────────────────────────────────
+
+
+// ── Issue #235: Reward Smoothing ──────────────────────────────────────────────
+
+
+
+// ── Issue #236: Referral Tree Visualization ───────────────────────────────────
+
+
+// ── Issue #237: Capacity Auction ──────────────────────────────────────────────
+
+
+
+// ── Issue #239: stake-weighted lottery ────────────────────────────────────────
+
+
+// ── Issue #238: loyalty milestone badges ──────────────────────────────────────
+
+
+
+// ── Issue #240: oracle-triggered lock-up release ──────────────────────────────
+
+
+
+// ── Issue #250: optimal claim frequency advisory ───────────────────────────────
+
+
+// ── Issue #257: auto-convert reward on claim ────────────────────────────────────
+
+
+// ── Issue #251: exit-queue priority bidding ─────────────────────────────────────
+
+
+// ── Issue #258: pool whitelabel branding ────────────────────────────────────────
+
+
+// ── Issue #259: staking insurance (principal protection) ────────────────────────
+
+
+
+// ── Issue #260: flash stake ─────────────────────────────────────────────────────
+
+
+// ── Issue #261: stake-backed loans ──────────────────────────────────────────────
+
+
+
+// ── Issue #276: seasonal reward multiplier ────────────────────────────────────
+
+
+// ── Issue #298: pool sunsetting workflow ──────────────────────────────────────
+
+
+// ── Issue #281: Fee Revenue Sharing ──────────────────────────────────────────
+
+
+
+// ── Issue #282: Stake-Gated Access ───────────────────────────────────────────
+
+
+// ── Issue #314: withdrawal receipt ───────────────────────────────────────────
+
+
+// ── Issue #309: staker onboarding checklist ───────────────────────────────────
+
+/// Tracks completion of the recommended onboarding steps for a staker (issue
+/// #309). Append-only: flags never reset to false even after the user
+/// unstakes. `completed_at` is set once, to the ledger at which the last
+/// remaining flag first flipped true.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct OnboardingChecklist {
+    pub has_staked: bool,
+    pub has_claimed: bool,
+    pub has_set_bio: bool,
+    pub has_enabled_streaming: bool,
+    pub has_set_auto_restake: bool,
+    pub completed_at: Option<u32>,
+}
+
+/// A contract address approved to stake on a user's behalf.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContractDelegate {
+    pub contract_address: Address,
+    pub max_stake_per_call: i128,
+    pub total_authorized: i128,
+    pub total_used: i128,
+}
+
+// ── Issue #392: loyalty points system ───────────────────────────────────────
+
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum PointsAction {
+    PerLedgerStaked,
+    PerClaim,
+    PerGovernanceVote,
+    PerMilestone,
+    PerReferral,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PointsRule {
+    pub action: PointsAction,
+    pub points_per_action: u32,
+}
+
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum PointsBenefit {
+    FeeWaiver,
+    BoostUnlock,
+    EarlyAccess,
+}
+
+/// Quiz structure for stake_to_learn feature (issue #391).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Quiz {
+    pub id: u32,
+    pub question_hash: soroban_sdk::Bytes,
+    pub answer_hash: soroban_sdk::Bytes,
+    pub reward_tier_unlocked: u32,
+    pub attempts_allowed: u32,
+}
+
+// ── Issue #377: position health alert ────────────────────────────────────────
+
+/// Result of `position_health_alert()`: a unified check across every
+/// attention-worthy condition a staker's position can be in (issue #377).
+///
+/// Each `Option` field is `None` when that condition doesn't apply to the
+/// position (e.g. no lock period configured, or no outstanding loan) rather
+/// than a false alarm. `needs_attention` is the OR of the four boolean flags,
+/// so a frontend can branch on it alone without inspecting every field.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PositionHealthAlert {
+    pub user: Address,
+    pub needs_attention: bool,
+    pub approaching_expiry: bool,
+    pub ledgers_until_expiry: Option<u32>,
+    pub lock_ending_soon: bool,
+    pub ledgers_until_unlock: Option<u32>,
+    pub loan_at_risk: bool,
+    pub loan_health_factor_bps: Option<u32>,
+    pub rewards_near_cap: bool,
+}
+
+// ── Issue #376: halving countdown ────────────────────────────────────────────
+
+/// Countdown to the next reward halving, returned by `halving_countdown()`
+/// (issue #376). Builds on the halving schedule from issue #231
+/// (`HalvingConfig`). All fields are zero when no halving schedule has been
+/// configured via `set_halving_config()`.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct HalvingCountdown {
+    pub next_halving_ledger: u32,
+    pub ledgers_remaining: u32,
+    pub estimated_days_remaining: u32,
+    pub halvings_so_far: u32,
+    pub current_rate_bps: i128,
+    pub post_halving_rate_bps: i128,
+}
+
+// ── Issue #375: governance proposal comment thread ───────────────────────────
+
+/// A single stake-weighted comment on a governance proposal (issue #375).
+///
+/// `stake_weight` is the author's staked shares snapshotted at post time —
+/// same convention `GovernanceProposal` voting already uses ("not adjusted
+/// retroactively if the staker's position changes afterward").
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProposalComment {
+    pub author: Address,
+    pub text: String,
+    pub stake_weight: i128,
+    pub posted_at: u32,
+}
+

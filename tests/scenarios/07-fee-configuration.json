@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "name": "configure zero unstake fee",
+  "steps": [
+    { "action": "set_fee", "actor": "admin", "args": { "bps": 0 } }
+  ],
+  "expected": [
+    { "type": "fee_bps", "equals": 0 },
+    { "type": "last_result", "equals": true }
+  ]
+}

@@ -1,0 +1,53 @@
+# gitleaks configuration for Stellar-Defi-Vault (#851).
+#
+# Extend the default ruleset (https://github.com/gitleaks/gitleaks) with
+# project-specific allowlists for known false positives.
+title = "Stellar-Defi-Vault gitleaks config"
+
+[extend]
+# Pull in gitleaks' upstream default rules.
+useDefault = true
+
+# ---------------------------------------------------------------------------
+# Allowlist — entries here are NOT secrets.
+# Add a justification comment for every entry so reviewers understand why
+# the value is safe to store in the repository.
+# ---------------------------------------------------------------------------
+[[rules]]
+id          = "stellar-testnet-public-key"
+description = "Stellar testnet public (G…) addresses used in scripts and docs"
+# Public keys are safe to commit — they carry no spending authority.
+# The matching secret (S…) key is never stored in the repository.
+regex       = "G[A-Z2-7]{55}"
+allowlist.regexTarget = "match"
+allowlist.regexes = [
+  # Friendbot / Stellar testnet horizon example address used in deploy docs.
+  "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN",
+  # Testnet admin identity created by `stellar keys generate --network testnet`.
+  # This is a *public* key only; the corresponding secret lives in the
+  # operator's local keystore, never in this repository.
+  "GBMHRACHAABBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+]
+
+[allowlist]
+description = "Project-wide false-positive suppressions"
+paths = [
+  # Test fixtures and example data are not production secrets.
+  "src/tests/**",
+  # Documentation may contain redacted or example key fragments.
+  "docs/**",
+  "README.md",
+  "CONTRIBUTING.md",
+]
+regexes = [
+  # XDR base64 blobs in test vectors (not keys).
+  "AAAA[A-Za-z0-9+/]{20,}={0,2}",
+  # Example mnemonic phrases clearly labelled as test-only.
+  "abandon abandon abandon",
+]
+commits = [
+  # If a known-safe historical commit is flagged by the scheduled scan,
+  # add its SHA here with a justification comment.
+  # Example:
+  # "aabbccdd",  # Initial repo scaffold — no real secrets, only placeholder values.
+]

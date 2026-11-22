@@ -1,10 +1,105 @@
 use crate::storage::AdminAction;
-use soroban_sdk::{symbol_short, Address, Env};
+use soroban_sdk::{contractevent, symbol_short, Address, Env, Symbol};
+
+/// Deposit event preserving the existing topic order and positional data.
+#[contractevent(topics = ["deposit"], data_format = "vec")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DepositEvent {
+    /// Account that deposited.
+    #[topic]
+    pub depositor: Address,
+    /// Token amount deposited.
+    pub amount: i128,
+    /// Shares minted for the deposit.
+    pub shares_minted: i128,
+    /// Ledger sequence at which the deposit occurred.
+    pub ledger: u32,
+}
 
 pub fn deposit(env: &Env, depositor: &Address, amount: i128, shares_minted: i128, ledger: u32) {
-    let topics = (symbol_short!("deposit"), depositor);
-    env.events()
-        .publish(topics, (amount, shares_minted, ledger));
+    DepositEvent {
+        depositor: depositor.clone(),
+        amount,
+        shares_minted,
+        ledger,
+    }
+    .publish(env);
+}
+
+pub fn referral_bonus_paid(
+    env: &Env,
+    referrer: &Address,
+    referee: &Address,
+    referrer_bonus: i128,
+    referee_bonus: i128,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("ref_bns"), referrer.clone(), referee.clone()),
+        (referrer_bonus, referee_bonus, ledger),
+    );
+}
+
+pub fn referral_earnings_claimed(
+    env: &Env,
+    referrer: &Address,
+    amount: i128,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("ref_clm"), referrer.clone()),
+        (amount, ledger),
+    );
+}
+
+pub fn ve_boost_locked(
+    env: &Env,
+    user: &Address,
+    amount: i128,
+    duration_ledgers: u32,
+    unlock_ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("ve_lck"), user.clone()),
+        (amount, duration_ledgers, unlock_ledger),
+    );
+}
+
+pub fn ve_boost_unlocked(
+    env: &Env,
+    user: &Address,
+    amount: i128,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("ve_unl"), user.clone()),
+        (amount, ledger),
+    );
+}
+
+pub fn gauge_voted(
+    env: &Env,
+    user: &Address,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("g_voted"), user.clone()),
+        ledger,
+    );
+}
+
+pub fn proposal_vote_changed(
+    env: &Env,
+    user: &Address,
+    proposal_id: u32,
+    support: bool,
+    weight: i128,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("v_chg"), user.clone(), proposal_id),
+        (support, weight, ledger),
+    );
 }
 
 pub fn withdraw(
@@ -19,8 +114,46 @@ pub fn withdraw(
         .publish(topics, (shares_burned, amount_returned, ledger));
 }
 
+/// Emitted when a user exits through the paused-vault break-glass path.
+pub fn emergency_withdrawal(
+    env: &Env,
+    user: &Address,
+    amount_returned: i128,
+    rewards_forfeited: i128,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("emg_wdraw"), user.clone()),
+        (amount_returned, rewards_forfeited, ledger),
+    );
+}
+
+pub fn position_locked(
+    env: &Env,
+    user: &Address,
+    lock_duration_ledgers: u32,
+    boost_bps: u32,
+    unlocks_at: u32,
+    ledger: u32,
+) {
+    env.events().publish(
+        (symbol_short!("pos_lock"), user.clone()),
+        (lock_duration_ledgers, boost_bps, unlocks_at, ledger),
+    );
+}
+
 pub fn unpaused(env: &Env, admin: &Address, ledger: u32) {
     let topics = (symbol_short!("unpaused"), admin);
+    env.events().publish(topics, (ledger,));
+}
+
+/// Emitted when a `pause_until` schedule lazily lifts a pause on some
+/// unrelated call, rather than via an explicit admin `unpause()` (issue
+/// #556) — no admin address is relevant here since no one authorized this
+/// specific transaction to unpause the pool; it just happened to be the
+/// first call after `target_ledger`.
+pub fn auto_unpaused(env: &Env, ledger: u32) {
+    let topics = (symbol_short!("auto_unp"),);
     env.events().publish(topics, (ledger,));
 }
 
@@ -49,7 +182,7 @@ pub fn bootstrap_started(
     base_rate_bps: u32,
     duration_ledgers: u32,
 ) {
-    let topics = (symbol_short!("boot_str"),);
+    let topics = (symbol_short!("boot_str"), env.current_contract_address());
     env.events().publish(
         topics,
         (
@@ -64,7 +197,7 @@ pub fn bootstrap_started(
 /// Issue #202: emitted the first time any call notices the bootstrap period
 /// has elapsed and settles the rate to `base_rate_bps` permanently.
 pub fn bootstrap_ended(env: &Env, base_rate_bps: u32) {
-    let topics = (symbol_short!("boot_end"),);
+    let topics = (symbol_short!("boot_end"), env.current_contract_address());
     env.events()
         .publish(topics, (base_rate_bps, env.ledger().sequence()));
 }
@@ -77,20 +210,20 @@ pub fn fee_distributed(env: &Env, recipient: &Address, amount: i128, ledger: u32
 
 /// Issue #195: emitted by `queue_action()`.
 pub fn action_queued(env: &Env, action_id: u32, executable_at: u32) {
-    let topics = (symbol_short!("act_queue"),);
+    let topics = (symbol_short!("act_queue"), env.current_contract_address());
     env.events()
         .publish(topics, (action_id, executable_at, env.ledger().sequence()));
 }
 
 /// Issue #195: emitted by `execute_action()`.
 pub fn action_executed(env: &Env, action_id: u32) {
-    let topics = (symbol_short!("act_exec"),);
+    let topics = (symbol_short!("act_exec"), env.current_contract_address());
     env.events()
         .publish(topics, (action_id, env.ledger().sequence()));
 }
 
 pub fn rate_changed(env: &Env, old_rate_bps: u32, new_rate_bps: u32) {
-    let topics = (symbol_short!("rate_chg"),);
+    let topics = (symbol_short!("rate_chg"), env.current_contract_address());
     env.events().publish(
         topics,
         (old_rate_bps, new_rate_bps, env.ledger().sequence()),
@@ -99,7 +232,7 @@ pub fn rate_changed(env: &Env, old_rate_bps: u32, new_rate_bps: u32) {
 
 /// Issue #206: emitted by `rollback_last_rate_change()`.
 pub fn rate_rolled_back(env: &Env, restored_rate: u32, discarded_rate: u32) {
-    let topics = (symbol_short!("rate_rbk"),);
+    let topics = (symbol_short!("rate_rbk"), env.current_contract_address());
     env.events().publish(
         topics,
         (restored_rate, discarded_rate, env.ledger().sequence()),
@@ -163,6 +296,24 @@ pub fn position_opened(env: &Env, user: &Address, amount: i128) {
         .publish(topics, (amount, env.ledger().sequence()));
 }
 
+/// Emitted by `exit()` once rewards are paid and the whole position is closed.
+/// `principal` is what `recipient` actually received (after any penalty and
+/// fee), `reward` is what `user` received, and `fee` is the unstake fee charged.
+pub fn position_exited(
+    env: &Env,
+    user: &Address,
+    recipient: &Address,
+    principal: i128,
+    reward: i128,
+    fee: i128,
+) {
+    let topics = (symbol_short!("pos_exit"), user);
+    env.events().publish(
+        topics,
+        (principal, reward, fee, recipient.clone(), env.ledger().sequence()),
+    );
+}
+
 pub fn position_closed(env: &Env, user: &Address) {
     let topics = (symbol_short!("pos_clos"), user);
     env.events().publish(topics, (env.ledger().sequence(),));
@@ -171,7 +322,7 @@ pub fn position_closed(env: &Env, user: &Address) {
 // ── Issue #39: rescue token event ────────────────────────────────────────────
 
 pub fn token_rescued(env: &Env, token: &Address, amount: i128, recipient: &Address) {
-    let topics = (symbol_short!("tk_rescue"),);
+    let topics = (symbol_short!("tk_rescue"), recipient);
     env.events().publish(
         topics,
         (
@@ -187,42 +338,42 @@ pub fn token_rescued(env: &Env, token: &Address, amount: i128, recipient: &Addre
 
 pub fn admin_action_set_reward_rate(env: &Env, actor: &Address, old_rate: u32, new_rate: u32) {
     env.events().publish(
-        (symbol_short!("adm_act"), AdminAction::SetRewardRate),
+        (symbol_short!("adm_act"), actor, AdminAction::SetRewardRate),
         (actor.clone(), env.ledger().sequence(), old_rate, new_rate),
     );
 }
 
 pub fn admin_action_pause(env: &Env, actor: &Address) {
     env.events().publish(
-        (symbol_short!("adm_act"), AdminAction::Pause),
+        (symbol_short!("adm_act"), actor, AdminAction::Pause),
         (actor.clone(), env.ledger().sequence()),
     );
 }
 
 pub fn admin_action_unpause(env: &Env, actor: &Address) {
     env.events().publish(
-        (symbol_short!("adm_act"), AdminAction::Unpause),
+        (symbol_short!("adm_act"), actor, AdminAction::Unpause),
         (actor.clone(), env.ledger().sequence()),
     );
 }
 
 pub fn admin_action_transfer_admin(env: &Env, actor: &Address, new_admin: &Address) {
     env.events().publish(
-        (symbol_short!("adm_act"), AdminAction::TransferAdmin),
+        (symbol_short!("adm_act"), actor, AdminAction::TransferAdmin),
         (actor.clone(), env.ledger().sequence(), new_admin.clone()),
     );
 }
 
 pub fn admin_action_set_lock_period(env: &Env, actor: &Address, new_ledgers: u32) {
     env.events().publish(
-        (symbol_short!("adm_act"), AdminAction::SetLockPeriod),
+        (symbol_short!("adm_act"), actor, AdminAction::SetLockPeriod),
         (actor.clone(), env.ledger().sequence(), new_ledgers),
     );
 }
 
 pub fn admin_action_set_cap(env: &Env, actor: &Address, new_limit: i128) {
     env.events().publish(
-        (symbol_short!("adm_act"), AdminAction::SetCap),
+        (symbol_short!("adm_act"), actor, AdminAction::SetCap),
         (actor.clone(), env.ledger().sequence(), new_limit),
     );
 }
@@ -235,7 +386,7 @@ pub fn admin_action_rescue_token(
     recipient: &Address,
 ) {
     env.events().publish(
-        (symbol_short!("adm_act"), AdminAction::RescueToken),
+        (symbol_short!("adm_act"), actor, AdminAction::RescueToken),
         (
             actor.clone(),
             env.ledger().sequence(),
@@ -248,56 +399,56 @@ pub fn admin_action_rescue_token(
 
 pub fn admin_action_set_early_exit_penalty(env: &Env, actor: &Address, new_bps: u32) {
     env.events().publish(
-        (symbol_short!("adm_act"), AdminAction::SetEarlyExitPenalty),
+        (symbol_short!("adm_act"), actor, AdminAction::SetEarlyExitPenalty),
         (actor.clone(), env.ledger().sequence(), new_bps),
     );
 }
 
 pub fn admin_action_set_min_stake(env: &Env, actor: &Address, new_amount: i128) {
     env.events().publish(
-        (symbol_short!("adm_act"), AdminAction::SetMinStake),
+        (symbol_short!("adm_act"), actor, AdminAction::SetMinStake),
         (actor.clone(), env.ledger().sequence(), new_amount),
     );
 }
 
 pub fn admin_action_fund_reward_pool(env: &Env, actor: &Address, amount: i128) {
     env.events().publish(
-        (symbol_short!("adm_act"), AdminAction::FundRewardPool),
+        (symbol_short!("adm_act"), actor, AdminAction::FundRewardPool),
         (actor.clone(), env.ledger().sequence(), amount),
     );
 }
 
 pub fn admin_action_add_yield(env: &Env, actor: &Address, amount: i128) {
     env.events().publish(
-        (symbol_short!("adm_act"), AdminAction::AddYield),
+        (symbol_short!("adm_act"), actor, AdminAction::AddYield),
         (actor.clone(), env.ledger().sequence(), amount),
     );
 }
 
 pub fn admin_action_set_boost_schedule(env: &Env, actor: &Address, num_tiers: u32) {
     env.events().publish(
-        (symbol_short!("adm_act"), AdminAction::SetBoostSchedule),
+        (symbol_short!("adm_act"), actor, AdminAction::SetBoostSchedule),
         (actor.clone(), env.ledger().sequence(), num_tiers),
     );
 }
 
 pub fn admin_action_set_nft_contract(env: &Env, actor: &Address, nft_addr: &Address) {
     env.events().publish(
-        (symbol_short!("adm_act"), AdminAction::SetNftContract),
+        (symbol_short!("adm_act"), actor, AdminAction::SetNftContract),
         (actor.clone(), env.ledger().sequence(), nft_addr.clone()),
     );
 }
 
 pub fn admin_action_set_restake_window(env: &Env, actor: &Address, window: u32) {
     env.events().publish(
-        (symbol_short!("adm_act"), AdminAction::SetRestakeWindow),
+        (symbol_short!("adm_act"), actor, AdminAction::SetRestakeWindow),
         (actor.clone(), env.ledger().sequence(), window),
     );
 }
 
 pub fn admin_action_set_reward_token(env: &Env, actor: &Address, token: &Address) {
     env.events().publish(
-        (symbol_short!("adm_act"), AdminAction::SetRewardToken),
+        (symbol_short!("adm_act"), actor, AdminAction::SetRewardToken),
         (actor.clone(), env.ledger().sequence(), token.clone()),
     );
 }
@@ -355,7 +506,7 @@ pub fn auto_restaked(env: &Env, user: &Address, amount: i128) {
 
 /// Emitted when the contract automatically pauses because reward funding dropped too low.
 pub fn auto_paused(env: &Env, reward_balance: i128, threshold: i128) {
-    let topics = (symbol_short!("auto_ps"),);
+    let topics = (symbol_short!("auto_ps"), env.current_contract_address());
     env.events()
         .publish(topics, (reward_balance, threshold, env.ledger().sequence()));
 }
@@ -366,6 +517,14 @@ pub fn claimed(env: &Env, user: &Address, reward: i128, ledger: u32) {
     env.events().publish(topics, (reward, ledger));
 }
 
+/// Emitted by `claim()` when a configured gas rebate is paid out of the
+/// dedicated gas-rebate pool alongside the ordinary reward payout (issue #569).
+pub fn gas_rebate_paid(env: &Env, user: &Address, amount: i128) {
+    let topics = (symbol_short!("gas_rbt"), user);
+    env.events()
+        .publish(topics, (amount, env.ledger().sequence()));
+}
+
 /// Emitted by `initialize` so indexers can detect new pool deployments on-chain.
 pub fn pool_initialized(
     env: &Env,
@@ -374,7 +533,7 @@ pub fn pool_initialized(
     reward_token: &Address,
     reward_rate_bps: u32,
 ) {
-    let topics = (symbol_short!("init"),);
+    let topics = (symbol_short!("init"), admin);
     env.events().publish(
         topics,
         (
@@ -491,10 +650,10 @@ pub fn pool_name_updated(env: &Env, admin: &Address, name: &soroban_sdk::String)
 
 /// Emitted when the reward pool runway drops below 30 days after a claim.
 ///
-/// Topics: `("rfil_alt",)`.
+/// Topics: `("rfil_alt", vault_address)`.
 /// Data: `(reward_balance: i128, ledgers_until_empty: u32, ledger: u32)`.
 pub fn refill_alert(env: &Env, reward_balance: i128, ledgers_until_empty: u32, ledger: u32) {
-    let topics = (symbol_short!("rfil_alt"),);
+    let topics = (symbol_short!("rfil_alt"), env.current_contract_address());
     env.events()
         .publish(topics, (reward_balance, ledgers_until_empty, ledger));
 }
@@ -574,6 +733,49 @@ pub fn proposal_created(env: &Env, proposer: &Address, proposal_id: u32, ends_at
     env.events().publish(topics, (proposal_id, ends_at));
 }
 
+/// Emitted when a proposal's bond is refunded to its proposer at
+/// `enact_proposal` time because the proposal reached quorum (win or
+/// lose). Distinct from `proposal_cancelled`'s refund, which happens
+/// earlier, when the proposer withdraws the proposal themselves.
+pub fn proposal_bond_refunded(
+    env: &Env,
+    proposer: &Address,
+    proposal_id: u32,
+    amount: i128,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("bond_rfnd"), proposer);
+    env.events().publish(topics, (proposal_id, amount, ledger));
+}
+
+/// Emitted when a proposal's bond is slashed to the treasury at
+/// `enact_proposal` time because the proposal failed to reach quorum.
+pub fn proposal_bond_slashed(
+    env: &Env,
+    proposer: &Address,
+    proposal_id: u32,
+    amount: i128,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("bond_slsh"), proposer);
+    env.events().publish(topics, (proposal_id, amount, ledger));
+}
+
+/// Emitted when the original proposer cancels their own proposal
+/// (`cancel_proposal`) before the window closes. `bond_refunded` is `0`
+/// when no bond was collected at creation.
+pub fn proposal_cancelled(
+    env: &Env,
+    proposer: &Address,
+    proposal_id: u32,
+    bond_refunded: i128,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("prop_cncl"), proposer);
+    env.events()
+        .publish(topics, (proposal_id, bond_refunded, ledger));
+}
+
 /// Emitted when a staker votes on a governance proposal.
 pub fn proposal_voted(
     env: &Env,
@@ -588,9 +790,29 @@ pub fn proposal_voted(
         .publish(topics, (proposal_id, support, weight, ledger));
 }
 
+/// Emitted when a voter changes their side on an open proposal
+/// (`change_vote`). `weight` is the voter's originally recorded weight
+/// (unchanged by the switch) and `change_count` is how many times they have
+/// now changed their vote on this proposal.
+pub fn vote_changed(
+    env: &Env,
+    voter: &Address,
+    proposal_id: u32,
+    new_support: bool,
+    weight: i128,
+    change_count: u32,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("vote_chg"), voter);
+    env.events().publish(
+        topics,
+        (proposal_id, new_support, weight, change_count, ledger),
+    );
+}
+
 /// Emitted when a governance proposal is enacted (whether or not it passed).
 ///
-/// Topics: `("prop_enct",)`.
+/// Topics: `("prop_enct", vault_address)`.
 /// Data: `(id, parameter, new_value, total_votes, ledger)`.
 pub fn proposal_enacted(
     env: &Env,
@@ -600,7 +822,7 @@ pub fn proposal_enacted(
     total_votes: i128,
     ledger: u32,
 ) {
-    let topics = (symbol_short!("prop_enct"),);
+    let topics = (symbol_short!("prop_enct"), env.current_contract_address());
     env.events()
         .publish(topics, (id, parameter, new_value, total_votes, ledger));
 }
@@ -630,7 +852,7 @@ pub fn merkle_claimed(env: &Env, user: &Address, amount: i128, epoch: u32, ledge
 // ── Issue #211: Staking Tournament Competition ─────────────────────────────────
 
 pub fn tournament_winner(env: &Env, winner: &Address, score: i128, prize_paid: i128, ledger: u32) {
-    let topics = (symbol_short!("tour_win"),);
+    let topics = (symbol_short!("tour_win"), winner);
     env.events()
         .publish(topics, (winner, score, prize_paid, ledger));
 }
@@ -638,7 +860,7 @@ pub fn tournament_winner(env: &Env, winner: &Address, score: i128, prize_paid: i
 // ── Issue #212: Buyback & Burn ────────────────────────────────────────────────
 
 pub fn buyback_executed(env: &Env, fee_amount_used: i128, reward_tokens_burned: i128, ledger: u32) {
-    let topics = (symbol_short!("buyback"),);
+    let topics = (symbol_short!("buyback"), env.current_contract_address());
     env.events()
         .publish(topics, (fee_amount_used, reward_tokens_burned, ledger));
 }
@@ -663,13 +885,13 @@ pub fn state_exported(env: &Env, admin: &Address, num_positions: u32, ledger: u3
 }
 
 pub fn penalty_redistributed(env: &Env, total_amount: i128, recipient_count: u32, ledger: u32) {
-    let topics = (symbol_short!("pen_rdst"),);
+    let topics = (symbol_short!("pen_rdst"), env.current_contract_address());
     env.events()
         .publish(topics, (total_amount, recipient_count, ledger));
 }
 
-pub fn insurance_deployed(env: &Env, amount: i128, new_balance: i128) {
-    let topics = (symbol_short!("ins_dep"),);
+pub fn insurance_deployed(env: &Env, admin: &Address, amount: i128, new_balance: i128) {
+    let topics = (symbol_short!("ins_dep"), admin);
     env.events()
         .publish(topics, (amount, new_balance, env.ledger().sequence()));
 }
@@ -684,7 +906,7 @@ pub fn insurance_deployed(env: &Env, amount: i128, new_balance: i128) {
 /// has an event to publish once one exists.
 #[allow(dead_code)]
 pub fn halving_occurred(env: &Env, halving_count: u32, effective_rate_bps: i128, ledger: u32) {
-    let topics = (symbol_short!("halving"),);
+    let topics = (symbol_short!("halving"), env.current_contract_address());
     env.events()
         .publish(topics, (halving_count, effective_rate_bps, ledger));
 }
@@ -706,13 +928,13 @@ pub fn certificate_issued(
 // ── Issue #233: pool activation events ────────────────────────────────────────
 
 pub fn pool_activated(env: &Env, total_staked: i128, threshold: i128, ledger: u32) {
-    let topics = (symbol_short!("pool_act"),);
+    let topics = (symbol_short!("pool_act"), env.current_contract_address());
     env.events()
         .publish(topics, (total_staked, threshold, ledger));
 }
 
 pub fn pool_deactivated(env: &Env, total_staked: i128, threshold: i128, ledger: u32) {
-    let topics = (symbol_short!("pool_dact"),);
+    let topics = (symbol_short!("pool_dact"), env.current_contract_address());
     env.events()
         .publish(topics, (total_staked, threshold, ledger));
 }
@@ -722,7 +944,7 @@ pub fn pool_deactivated(env: &Env, total_staked: i128, threshold: i128, ledger: 
 /// Emitted the first time pool TVL reaches the configured minimum pool size,
 /// which is the ledger reward accrual starts from.
 pub fn rewards_activated(env: &Env, total_staked: i128, min_pool_size: i128, ledger: u32) {
-    let topics = (symbol_short!("rwd_act"),);
+    let topics = (symbol_short!("rwd_act"), env.current_contract_address());
     env.events()
         .publish(topics, (total_staked, min_pool_size, ledger));
 }
@@ -744,14 +966,14 @@ pub fn smoothing_scheduled(
     start_ledger: u32,
     duration_ledgers: u32,
 ) {
-    let topics = (symbol_short!("smth_sch"),);
+    let topics = (symbol_short!("smth_sch"), env.current_contract_address());
     env.events()
         .publish(topics, (total_amount, start_ledger, duration_ledgers));
 }
 
 /// Emitted when a slice of a smoothing schedule is credited to the pool.
 pub fn smoothing_released(env: &Env, amount: i128, cumulative_released: i128, total_amount: i128) {
-    let topics = (symbol_short!("smth_rel"),);
+    let topics = (symbol_short!("smth_rel"), env.current_contract_address());
     env.events().publish(
         topics,
         (
@@ -766,7 +988,7 @@ pub fn smoothing_released(env: &Env, amount: i128, cumulative_released: i128, to
 // ── Issue #237: capacity auction events ───────────────────────────────────────
 
 pub fn auction_started(env: &Env, spots: u32, min_bid: i128, ends_at: u32) {
-    let topics = (symbol_short!("auct_st"),);
+    let topics = (symbol_short!("auct_st"), env.current_contract_address());
     env.events()
         .publish(topics, (spots, min_bid, ends_at, env.ledger().sequence()));
 }
@@ -790,7 +1012,7 @@ pub fn bid_refunded(env: &Env, bidder: &Address, amount: i128) {
 }
 
 pub fn auction_finalized(env: &Env, winner_count: u32, total_staked: i128, refunded: i128) {
-    let topics = (symbol_short!("auct_fin"),);
+    let topics = (symbol_short!("auct_fin"), env.current_contract_address());
     env.events().publish(
         topics,
         (
@@ -825,6 +1047,873 @@ pub fn dynamic_fee_config_updated(
             max_fee_bps,
             threshold_bps,
             env.ledger().sequence(),
+        ),
+    );
+}
+
+// ── Issue #239: stake-weighted lottery ────────────────────────────────────────
+
+pub fn lottery_drawn(
+    env: &Env,
+    winner: &Address,
+    prize_amount: i128,
+    random_seed: u64,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("lot_drwn"), winner);
+    env.events()
+        .publish(topics, (prize_amount, random_seed, ledger));
+}
+
+// ── Issue #238: loyalty milestone badges ──────────────────────────────────────
+
+pub fn milestone_achieved(
+    env: &Env,
+    user: &Address,
+    milestone_id: u32,
+    milestone_name: &soroban_sdk::String,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("mstn_ach"), user);
+    env.events()
+        .publish(topics, (milestone_id, milestone_name.clone(), ledger));
+}
+
+/// Emitted when a user successfully completes a quiz and unlocks a reward tier.
+pub fn quiz_completed(env: &Env, user: &Address, quiz_id: u32, tier_unlocked: u32, ledger: u32) {
+    let topics = (symbol_short!("quiz_comp"), user);
+    env.events()
+        .publish(topics, (quiz_id, tier_unlocked, ledger));
+}
+
+/// Emitted when a user fails a quiz attempt.
+pub fn quiz_attempt_failed(
+    env: &Env,
+    user: &Address,
+    quiz_id: u32,
+    remaining_attempts: u32,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("quiz_fail"), user);
+    env.events()
+        .publish(topics, (quiz_id, remaining_attempts, ledger));
+}
+
+/// Emitted when an admin adds a new quiz.
+pub fn quiz_added(env: &Env, admin: &Address, quiz_id: u32, tier_unlocked: u32, ledger: u32) {
+    let topics = (symbol_short!("quiz_add"), admin);
+    env.events()
+        .publish(topics, (quiz_id, tier_unlocked, ledger));
+}
+
+// ── Issue #240: oracle-triggered lock-up release ──────────────────────────────
+
+pub fn condition_triggered(
+    env: &Env,
+    user: &Address,
+    asset_id: &soroban_sdk::String,
+    oracle_price: i128,
+    trigger_price: i128,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("cond_trg"), user);
+    env.events().publish(
+        topics,
+        (asset_id.clone(), oracle_price, trigger_price, ledger),
+    );
+}
+
+// ── Issue #241: governance proposal veto ──────────────────────────────────────
+
+pub fn proposal_vetoed(
+    env: &Env,
+    user: &Address,
+    proposal_id: u32,
+    user_stake_bps: u32,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("prop_veto"), user);
+    env.events()
+        .publish(topics, (proposal_id, user_stake_bps, ledger));
+}
+
+/// Emitted when the guardian vetoes a proposal that passed its vote, during
+/// its execution delay. Distinct from `proposal_vetoed` above (the
+/// stake-weighted veto, issue #241): this one carries a `reason_hash`
+/// instead of a stake percentage, since the guardian's authority to veto
+/// comes from its role, not from holding a share of the pool.
+pub fn guardian_proposal_vetoed(
+    env: &Env,
+    guardian: &Address,
+    proposal_id: u32,
+    reason_hash: &soroban_sdk::BytesN<32>,
+    ledger: u32,
+) {
+    let topics = (Symbol::new(env, "proposal_vetoed"), guardian);
+    env.events()
+        .publish(topics, (proposal_id, reason_hash.clone(), ledger));
+}
+
+// ── Issue #256: governance vote weight delegation ──────────────────────────────
+
+pub fn vote_delegated(
+    env: &Env,
+    delegator: &Address,
+    delegate: &Address,
+    weight: i128,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("votedeleg"), delegator);
+    env.events()
+        .publish(topics, (delegate.clone(), weight, ledger));
+}
+
+// ── Issue #257: auto-convert reward on claim ────────────────────────────────────
+
+pub fn reward_converted(
+    env: &Env,
+    user: &Address,
+    reward_amount: i128,
+    converted_amount: i128,
+    target_token: &Address,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("rwd_conv"), user);
+    env.events().publish(
+        topics,
+        (
+            reward_amount,
+            converted_amount,
+            target_token.clone(),
+            ledger,
+        ),
+    );
+}
+
+// ── Issue #251: exit-queue priority bidding ─────────────────────────────────────
+
+pub fn priority_bid_placed(
+    env: &Env,
+    user: &Address,
+    bid_amount: i128,
+    previous_position: u32,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("pbid_plc"), user);
+    env.events()
+        .publish(topics, (bid_amount, previous_position, ledger));
+}
+
+// ── Issue #258: pool whitelabel branding ──────────────────────────────────────
+
+pub fn branding_updated(
+    env: &Env,
+    admin: &Address,
+    display_name: &soroban_sdk::String,
+    website_url: &soroban_sdk::String,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("brand_upd"), admin);
+    env.events()
+        .publish(topics, (display_name.clone(), website_url.clone(), ledger));
+}
+
+// ── Issue #259: staking insurance ─────────────────────────────────────────────
+
+pub fn insurance_activated(
+    env: &Env,
+    user: &Address,
+    premium_bps: u32,
+    coverage_amount: i128,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("ins_act"), user);
+    env.events()
+        .publish(topics, (premium_bps, coverage_amount, ledger));
+}
+
+pub fn insurance_cancelled(env: &Env, user: &Address, coverage_amount: i128, ledger: u32) {
+    let topics = (symbol_short!("ins_canc"), user);
+    env.events().publish(topics, (coverage_amount, ledger));
+}
+
+pub fn insurance_premium_paid(env: &Env, user: &Address, premium: i128, ledger: u32) {
+    let topics = (symbol_short!("ins_prem"), user);
+    env.events().publish(topics, (premium, ledger));
+}
+
+pub fn shortfall_paid(env: &Env, user: &Address, payout: i128, ledger: u32) {
+    let topics = (symbol_short!("shortfal"), user);
+    env.events().publish(topics, (payout, ledger));
+}
+
+// ── Issue #260: flash stake ───────────────────────────────────────────────────
+
+pub fn flash_staked(env: &Env, user: &Address, amount: i128, receipt_id: u64, ledger: u32) {
+    let topics = (symbol_short!("flash_st"), user);
+    env.events().publish(topics, (amount, receipt_id, ledger));
+}
+
+// ── Issue #261: stake-backed loans ────────────────────────────────────────────
+
+pub fn loan_opened(env: &Env, user: &Address, amount: i128, total_principal: i128, ledger: u32) {
+    let topics = (symbol_short!("loan_opn"), user);
+    env.events()
+        .publish(topics, (amount, total_principal, ledger));
+}
+
+pub fn loan_repaid(
+    env: &Env,
+    user: &Address,
+    amount: i128,
+    remaining_principal: i128,
+    remaining_interest: i128,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("loan_rpy"), user);
+    env.events().publish(
+        topics,
+        (amount, remaining_principal, remaining_interest, ledger),
+    );
+}
+
+pub fn loan_liquidated(
+    env: &Env,
+    user: &Address,
+    debt_covered: i128,
+    shares_slashed: i128,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("loan_liq"), user);
+    env.events()
+        .publish(topics, (debt_covered, shares_slashed, ledger));
+}
+
+// ── Issue #275: reward Gini coefficient ───────────────────────────────────────
+
+pub fn gini_computed(env: &Env, result_bps: u32, staker_count: u32, ledger: u32) {
+    let topics = (symbol_short!("gini_cmp"), env.current_contract_address());
+    env.events()
+        .publish(topics, (result_bps, staker_count, ledger));
+}
+
+// ── Issue #276: seasonal reward multiplier ────────────────────────────────────
+
+/// `starts_at` identifies the season (stable across `remove_season()` calls
+/// on other entries, unlike a Vec index).
+pub fn season_started(
+    env: &Env,
+    starts_at: u32,
+    name: &soroban_sdk::String,
+    multiplier_bps: u32,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("seas_str"), env.current_contract_address());
+    env.events()
+        .publish(topics, (starts_at, name.clone(), multiplier_bps, ledger));
+}
+
+pub fn season_ended(env: &Env, starts_at: u32, ledger: u32) {
+    let topics = (symbol_short!("seas_end"), env.current_contract_address());
+    env.events().publish(topics, (starts_at, ledger));
+}
+
+// ── Issue #274: staker bio ────────────────────────────────────────────────────
+
+/// No bio content in the event payload by design — keeps the event lean and
+/// avoids duplicating free-text content on-chain in two places.
+pub fn bio_updated(env: &Env, user: &Address, ledger: u32) {
+    let topics = (symbol_short!("bio_upd"), user);
+    env.events().publish(topics, (ledger,));
+}
+
+// ── Issue #298: pool sunsetting workflow ──────────────────────────────────────
+
+pub fn sunset_announced(env: &Env, admin: &Address, grace_period_end: u32, ledger: u32) {
+    let topics = (symbol_short!("snst_ann"), admin);
+    env.events().publish(topics, (grace_period_end, ledger));
+}
+
+pub fn sunset_stage_changed(env: &Env, new_state: crate::storage::SunsetState, ledger: u32) {
+    let topics = (symbol_short!("snst_chg"), env.current_contract_address());
+    env.events().publish(topics, (new_state, ledger));
+}
+
+/// Emitted once when `initiate_sunset` starts a graceful pool sunset
+/// (issue #525). `exit_deadline` is the ledger by which existing users are
+/// asked to have exited; deposits stay blocked for good afterwards, while
+/// withdrawals and claims remain open.
+pub fn sunset_initiated(env: &Env, admin: &Address, exit_deadline: u32) {
+    let topics = (symbol_short!("snst_ini"), admin);
+    env.events()
+        .publish(topics, (exit_deadline, env.ledger().sequence()));
+}
+
+pub fn force_resolved(
+    env: &Env,
+    user: &Address,
+    principal: i128,
+    accrued_reward: i128,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("frc_res"), user);
+    env.events()
+        .publish(topics, (principal, accrued_reward, ledger));
+}
+
+// ── Issue #286: debt NFT collateral ─────────────────────────────────────────
+
+pub fn debt_nft_minted(env: &Env, issuer: &Address, nft_id: u32, face_value: i128, ledger: u32) {
+    let topics = (symbol_short!("dbt_mnt"), issuer);
+    env.events().publish(topics, (nft_id, face_value, ledger));
+}
+
+pub fn debt_nft_burned(env: &Env, holder: &Address, nft_id: u32, ledger: u32) {
+    let topics = (symbol_short!("dbt_brn"), holder);
+    env.events().publish(topics, (nft_id, ledger));
+}
+
+pub fn debt_nft_transferred(env: &Env, from: &Address, to: &Address, nft_id: u32, ledger: u32) {
+    let topics = (symbol_short!("dbt_trn"), from);
+    env.events().publish(topics, (to, nft_id, ledger));
+}
+
+// ── Issue #283: position AMM ─────────────────────────────────────────────────
+
+pub fn swap_executed(
+    env: &Env,
+    offerer: &Address,
+    counterparty: &Address,
+    offerer_amount: i128,
+    counterparty_amount: i128,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("swap_exe"), offerer);
+    env.events().publish(
+        topics,
+        (counterparty, offerer_amount, counterparty_amount, ledger),
+    );
+}
+
+// ── Issue #284: reward prediction market ─────────────────────────────────────
+
+pub fn market_resolved(
+    env: &Env,
+    outcome: bool,
+    winning_side_total: i128,
+    losing_side_total: i128,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("mkt_rsl"), env.current_contract_address());
+    env.events()
+        .publish(topics, (outcome, winning_side_total, losing_side_total, ledger));
+    let topics = (symbol_short!("mkt_rsl"),);
+    env.events().publish(
+        topics,
+        (outcome, winning_side_total, losing_side_total, ledger),
+    );
+}
+
+// ── Issue #285: cross-pool yield detector ────────────────────────────────────
+
+pub fn higher_yield_detected(
+    env: &Env,
+    competitor: &Address,
+    their_rate: i128,
+    our_rate: i128,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("hi_yld"), competitor);
+    env.events().publish(topics, (their_rate, our_rate, ledger));
+}
+// ── Issue #281: Fee Revenue Sharing ──────────────────────────────────────────
+
+pub fn revenue_distributed(
+    env: &Env,
+    merkle_root: &soroban_sdk::Bytes,
+    total_amount: i128,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("rev_dist"), env.current_contract_address());
+    env.events()
+        .publish(topics, (merkle_root.clone(), total_amount, ledger));
+}
+
+pub fn revenue_share_claimed(env: &Env, user: &Address, amount: i128, epoch: u32, ledger: u32) {
+    let topics = (symbol_short!("rev_clm"), user);
+    env.events().publish(topics, (amount, epoch, ledger));
+}
+
+// ── Issue #280: New Staker Reward Escrow ────────────────────────────────────
+
+pub fn escrow_released(env: &Env, user: &Address, escrowed_amount: i128, ledger: u32) {
+    let topics = (symbol_short!("esc_rel"), user);
+    env.events()
+        .publish(topics, (user.clone(), escrowed_amount, ledger));
+}
+
+// ── Issue #282: Stake-Gated Access ───────────────────────────────────────────
+
+pub fn access_token_issued(env: &Env, user: &Address, tier_index: u32, ledger: u32) {
+    let topics = (symbol_short!("acc_iss"), user);
+    env.events().publish(topics, (tier_index, ledger));
+}
+
+pub fn access_token_revoked(
+    env: &Env,
+    user: &Address,
+    tier_index: u32,
+    reason: Symbol,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("acc_rev"), user);
+    env.events().publish(topics, (tier_index, reason, ledger));
+}
+
+// ── Issue #312: gift staking position ────────────────────────────────────────
+
+pub fn gift_staked(env: &Env, sender: &Address, recipient: &Address, amount: i128, ledger: u32) {
+    let topics = (symbol_short!("gift_stk"), sender);
+    env.events()
+        .publish(topics, (recipient.clone(), amount, ledger));
+}
+
+// ── Issue #313: anniversary bonus ────────────────────────────────────────────
+
+pub fn anniversary_bonus_paid(
+    env: &Env,
+    user: &Address,
+    anniversary_number: u32,
+    bonus_amount: i128,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("anniv_bp"), user);
+    env.events()
+        .publish(topics, (anniversary_number, bonus_amount, ledger));
+}
+
+// ── Issue #314: withdrawal receipt NFT ───────────────────────────────────────
+
+pub fn withdrawal_receipt_minted(
+    env: &Env,
+    user: &Address,
+    receipt_id: u64,
+    amount_returned: i128,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("wd_rcpt"), user);
+    env.events()
+        .publish(topics, (receipt_id, amount_returned, ledger));
+}
+
+
+pub fn fee_buyback_executed(
+    env: &Env,
+    admin: &Address,
+    stake_fees_used: i128,
+    reward_tokens_burned: i128,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("fee_buyb"), admin);
+    env.events()
+        .publish(topics, (stake_fees_used, reward_tokens_burned, ledger));
+}
+
+pub fn onboarding_completed(env: &Env, user: &Address, ledger: u32) {
+    let topics = (symbol_short!("onb_done"), user);
+    env.events().publish(topics, (ledger,));
+}
+/// Issue #242: emitted when a stake receives a matching contribution.
+pub fn stake_matched(
+    env: &Env,
+    user: &Address,
+    stake_amount: i128,
+    match_amount: i128,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("stk_match"), user);
+    env.events()
+        .publish(topics, (stake_amount, match_amount, ledger));
+}
+
+/// Issue #243: emitted when a user purchases unstake insurance.
+pub fn insurance_purchased(env: &Env, user: &Address, premium: i128, coverage: i128, ledger: u32) {
+    let topics = (symbol_short!("ins_buy"), user);
+    env.events().publish(topics, (premium, coverage, ledger));
+}
+
+// ── Keeper registry ───────────────────────────────────────────────────────────
+
+pub fn keeper_registered(env: &Env, keeper: &Address, ledger: u32) {
+    let topics = (symbol_short!("kpr_reg"), keeper);
+    env.events().publish(topics, (ledger,));
+}
+
+pub fn keeper_deregistered(env: &Env, keeper: &Address, ledger: u32) {
+    let topics = (symbol_short!("kpr_dreg"), keeper);
+    env.events().publish(topics, (ledger,));
+}
+
+// ── Epoch reward outflow cap ─────────────────────────────────────────────────
+
+/// Emitted when a claim exceeds the remaining epoch cap headroom and the
+/// excess is queued as a `DeferredReward`, claimable once `next_epoch_start`
+/// is reached.
+pub fn reward_deferred(env: &Env, user: &Address, deferred_amount: i128, next_epoch_start: u32) {
+    let topics = (symbol_short!("rwd_defr"), user);
+    env.events().publish(
+        topics,
+        (deferred_amount, next_epoch_start, env.ledger().sequence()),
+    );
+}
+
+/// Issue #244: emitted when rewards are claimed in a non-stake output token.
+// ── Issue #374: admin action nonce (replay protection) ───────────────────────
+
+/// Emitted by `execute_admin_action_with_nonce()` after a nonce-gated admin
+/// action successfully executes. `nonce` is the value that was just consumed
+/// — the admin's next call must supply `nonce + 1`.
+pub fn admin_action_nonce_consumed(env: &Env, admin: &Address, nonce: u64, ledger: u32) {
+    let topics = (symbol_short!("adm_nonce"), admin);
+    env.events().publish(topics, (nonce, ledger));
+}
+
+// ── Issue #376: halving countdown ─────────────────────────────────────────────
+// Read-only advisory (like `reward_smoothing()`'s `SmoothingStatus`) — no
+// event to emit, nothing about pool state changes when it's queried.
+
+// ── Issue #375: governance proposal comment thread ────────────────────────────
+
+/// Emitted by `post_proposal_comment()` when a stake-weighted comment is
+/// added to a proposal's thread.
+pub fn proposal_comment_posted(
+    env: &Env,
+    author: &Address,
+    proposal_id: u32,
+    stake_weight: i128,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("prop_cmt"), author);
+    env.events()
+        .publish(topics, (proposal_id, stake_weight, ledger));
+}
+
+// ── Issue #377: position health alert ─────────────────────────────────────────
+
+/// Emitted by `position_health_alert()` when at least one attention-worthy
+/// condition is true for the checked position.
+pub fn position_health_alert(
+    env: &Env,
+    user: &Address,
+    approaching_expiry: bool,
+    lock_ending_soon: bool,
+    loan_at_risk: bool,
+    rewards_near_cap: bool,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("pos_hlth"), user);
+    env.events().publish(
+        topics,
+        (
+            approaching_expiry,
+            lock_ending_soon,
+            loan_at_risk,
+            rewards_near_cap,
+            ledger,
+        ),
+    );
+}
+
+pub fn reward_claimed_in_token(
+    env: &Env,
+    user: &Address,
+    reward_amount: i128,
+    output_token: &Address,
+    output_amount: i128,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("rw_in_tok"), user);
+    env.events().publish(
+        topics,
+        (reward_amount, output_token.clone(), output_amount, ledger),
+    );
+}
+
+// ── Issue #392: loyalty points events ───────────────────────────────────────
+
+pub fn points_awarded(env: &Env, user: &Address, amount: u32, new_balance: u32, ledger: u32) {
+    let topics = (symbol_short!("loy_awd"), user.clone());
+    env.events().publish(topics, (amount, new_balance, ledger));
+}
+
+pub fn points_redeemed(
+    env: &Env,
+    user: &Address,
+    amount: u32,
+    benefit: crate::storage::PointsBenefit,
+    new_balance: u32,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("loy_rdm"), user.clone());
+    env.events()
+        .publish(topics, (amount, benefit, new_balance, ledger));
+}
+
+pub fn loyalty_config_updated(env: &Env, rules_len: u32, ledger: u32) {
+    let topics = (symbol_short!("loy_cfg"),);
+    env.events().publish(topics, (rules_len, ledger));
+}
+
+/// Emitted when an address's KYC approval status changes.
+pub fn kyc_status_changed(env: &Env, user: &Address, approved: bool) {
+    let topics = (symbol_short!("kyc_set"), user);
+    env.events().publish(topics, approved);
+}
+
+// ── Issue #541: deposit receipt memo ─────────────────────────────────────────
+
+/// Emitted by `deposit_with_memo()` (issue #541).
+pub fn deposit_completed(
+    env: &Env,
+    depositor: &Address,
+    amount: i128,
+    shares_minted: i128,
+    memo: &soroban_sdk::String,
+    ledger: u32,
+) {
+    let topics = (Symbol::new(env, "deposit_completed"), depositor);
+    env.events()
+        .publish(topics, (amount, shares_minted, memo.clone(), ledger));
+}
+
+// ── Issue #540: scheduled reward-rate ramp ───────────────────────────────────
+
+/// Emitted when a linear reward-rate ramp begins (issue #540).
+pub fn rate_ramp_started(
+    env: &Env,
+    start_rate_bps: u32,
+    target_rate_bps: u32,
+    duration_ledgers: u32,
+    start_ledger: u32,
+) {
+    let topics = (Symbol::new(env, "rate_ramp_started"),);
+    env.events().publish(
+        topics,
+        (
+            start_rate_bps,
+            target_rate_bps,
+            duration_ledgers,
+            start_ledger,
+        ),
+    );
+}
+
+/// Emitted when a linear reward-rate ramp completes or is settled (issue #540).
+pub fn rate_ramp_completed(env: &Env, final_rate_bps: u32, ledger: u32) {
+    let topics = (Symbol::new(env, "rate_ramp_completed"),);
+    env.events()
+        .publish(topics, (final_rate_bps, ledger));
+}
+
+// ── Issue #539: per-token fee override ───────────────────────────────────────
+
+/// Emitted when a per-token fee override is configured or cleared (issue #539).
+pub fn token_fee_override_set(
+    env: &Env,
+    token: &Address,
+    deposit_fee_bps: Option<u32>,
+    unstake_fee_bps: Option<u32>,
+    ledger: u32,
+) {
+    let topics = (Symbol::new(env, "token_fee_set"), token);
+    env.events()
+        .publish(topics, (deposit_fee_bps, unstake_fee_bps, ledger));
+}
+
+// ── Issues #542-545 ────────────────────────────────────────────────────────
+
+/// Emitted once per low episode when the reward pool drops below the
+/// admin-configured threshold relative to outstanding obligations (#544).
+/// The notified flag resets on recovery, so a new episode emits again —
+/// but repeated calls while continuously low never re-emit.
+pub fn reward_pool_low(
+    env: &Env,
+    pool_balance: i128,
+    outstanding_obligations: i128,
+    threshold_bps: u32,
+    ledger: u32,
+) {
+    let topics = (symbol_short!("rwpl_low"),);
+    env.events().publish(
+        topics,
+        (pool_balance, outstanding_obligations, threshold_bps, ledger),
+    );
+}
+
+/// Emitted when a keeper records an APY snapshot into the rolling history (#543).
+pub fn apy_snapshot_recorded(env: &Env, apy_bps: u32, ledger: u32) {
+    let topics = (symbol_short!("apy_snap"),);
+    env.events().publish(topics, (apy_bps, ledger));
+}
+
+// ── Issues #701-#704: fee holiday and insurance reserve ──────────────────────
+
+/// Emitted when the admin starts a fee holiday (issue #703).
+pub fn fee_holiday_started(env: &Env, ends_at_ledger: u32, ledger: u32) {
+    let topics = (Symbol::new(env, "fee_holiday_started"),);
+    env.events().publish(topics, (ends_at_ledger, ledger));
+}
+
+/// Emitted when a fee holiday ends, either through `end_fee_holiday` or lazily
+/// the first time a fee calculation sees that it has expired (issue #703).
+pub fn fee_holiday_ended(env: &Env, ends_at_ledger: u32, ledger: u32) {
+    let topics = (Symbol::new(env, "fee_holiday_ended"),);
+    env.events().publish(topics, (ends_at_ledger, ledger));
+}
+
+/// Emitted when the admin releases funds from the insurance reserve (issue #704).
+pub fn insurance_reserve_used(
+    env: &Env,
+    admin: &Address,
+    amount: i128,
+    reason_hash: &soroban_sdk::BytesN<32>,
+    ledger: u32,
+) {
+    let topics = (Symbol::new(env, "insurance_reserve_used"), admin);
+    env.events()
+        .publish(topics, (amount, reason_hash.clone(), ledger));
+}
+
+/// Emitted when an admin proposes a new administrator address (Issue #738).
+pub fn admin_proposal_created(env: &Env, admin: &Address, new_admin: &Address) {
+    env.events().publish(
+        (symbol_short!("adm_prop"), admin.clone()),
+        (new_admin.clone(), env.ledger().sequence()),
+    );
+}
+
+/// Emitted when a proposed admin accepts and completes the transfer (Issue #738).
+pub fn admin_proposal_accepted(env: &Env, old_admin: &Address, new_admin: &Address) {
+    env.events().publish(
+        (symbol_short!("adm_acpt"), old_admin.clone()),
+        (new_admin.clone(), env.ledger().sequence()),
+    );
+}
+
+/// Emitted when an admin cancels an active admin transfer proposal (Issue #738).
+pub fn admin_proposal_cancelled(env: &Env, admin: &Address, cancelled_admin: &Address) {
+    env.events().publish(
+        (symbol_short!("adm_canc"), admin.clone()),
+        (cancelled_admin.clone(), env.ledger().sequence()),
+    );
+}
+
+/// Emitted whenever a deprecated entrypoint is invoked (issue #881).
+///
+/// `function` names the deprecated entrypoint and `caller` is the address that
+/// signed the call, so indexers can find remaining integrations before the
+/// removal release. See `docs/DEPRECATION.md` for the notice period and the
+/// list of deprecated entrypoints.
+pub fn deprecated_call(env: &Env, caller: &Address, function: &Symbol, ledger: u32) {
+    env.events().publish(
+        (symbol_short!("deprec"), caller.clone()),
+        (function.clone(), ledger),
+    );
+}
+
+/// Emitted when the global reward accumulator index updates (Issue #650).
+pub fn reward_accumulator_updated(env: &Env, global_index: i128, ledger: u32) {
+    env.events().publish(
+        (symbol_short!("rw_acc"),),
+        (global_index, ledger),
+    );
+}
+
+/// Emitted when the minimum idle buffer ratio is updated (issue #765).
+pub fn min_idle_ratio_updated(env: &Env, admin: &Address, bps: u32, ledger: u32) {
+    env.events().publish(
+        (symbol_short!("idle_upd"), admin.clone()),
+        (bps, ledger),
+    );
+}
+
+/// Emitted when funds are allocated to a strategy adapter (issue #765).
+pub fn strategy_allocated(env: &Env, adapter: &Address, amount: i128, ledger: u32) {
+    env.events().publish(
+        (symbol_short!("str_alloc"), adapter.clone()),
+        (amount, ledger),
+    );
+}
+
+/// Emitted when funds are pulled from a strategy to satisfy a withdrawal (issue #765).
+pub fn strategy_pulled(env: &Env, adapter: &Address, amount: i128, ledger: u32) {
+    env.events().publish(
+        (symbol_short!("str_pull"), adapter.clone()),
+        (amount, ledger),
+    );
+}
+
+/// Emitted when strategy yield is harvested and performance fee taken (issue #766).
+pub fn harvested(env: &Env, strategy: &Address, gain: i128, fee: i128, ledger: u32) {
+    let topics = (Symbol::new(env, "harvested"), strategy.clone());
+    env.events().publish(topics, (gain, fee, ledger));
+}
+
+/// Emitted when a strategy shortfall or realized loss is recorded (issue #767).
+pub fn strategy_loss_recorded(
+    env: &Env,
+    strategy: &Address,
+    total_loss: i128,
+    reserve_absorbed: i128,
+    share_price_absorbed: i128,
+    ledger: u32,
+) {
+    let topics = (Symbol::new(env, "strategy_loss_recorded"), strategy.clone());
+    env.events().publish(
+        topics,
+        (total_loss, reserve_absorbed, share_price_absorbed, ledger),
+    );
+}
+
+/// Emitted when a strategy is emergency unwound and disabled (issue #768).
+pub fn strategy_unwound(
+    env: &Env,
+    strategy: &Address,
+    recovered: i128,
+    loss: i128,
+    ledger: u32,
+) {
+    let topics = (Symbol::new(env, "strategy_unwound"), strategy.clone());
+    env.events().publish(topics, (recovered, loss, ledger));
+}
+
+/// Emitted when a queued operator slash is executed (issue #933).
+#[allow(clippy::too_many_arguments)]
+pub fn operator_slashed(
+    env: &Env,
+    operator: &Address,
+    slash_id: u32,
+    amount_bps: u32,
+    slash_amount: i128,
+    to_insurance: i128,
+    to_delegators: i128,
+    evidence_hash: &soroban_sdk::BytesN<32>,
+    ledger: u32,
+) {
+    let topics = (
+        Symbol::new(env, "operator_slashed"),
+        operator.clone(),
+        slash_id,
+    );
+    env.events().publish(
+        topics,
+        (
+            amount_bps,
+            slash_amount,
+            to_insurance,
+            to_delegators,
+            evidence_hash.clone(),
+            ledger,
         ),
     );
 }

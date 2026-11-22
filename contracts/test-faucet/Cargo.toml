@@ -1,0 +1,16 @@
+[package]
+name = "test-faucet"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Rate-limited testnet faucet contract for demo and testing tokens"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+mainnet = []
+
+[dependencies]
+soroban-sdk = { version = "=29.0.1" }

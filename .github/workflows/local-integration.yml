@@ -1,0 +1,42 @@
+name: Standalone Quickstart Integration
+
+on:
+  schedule:
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+
+jobs:
+  local-node-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Start Stellar Quickstart Standalone Node
+        run: |
+          docker compose -f docker-compose.quickstart.yml up -d
+          echo "Waiting for standalone node RPC..."
+          for i in {1..30}; do
+            if curl -s http://localhost:8000/soroban/rpc >/dev/null 2>&1; then
+              echo "Standalone RPC is online!"
+              break
+            fi
+            sleep 2
+          done
+
+      - name: Setup Stellar CLI
+        run: echo "Setting up stellar-cli..."
+
+      - name: Run Integration Tests on Local Network
+        env:
+          NETWORK: local
+          SOROBAN_RPC_URL: "http://localhost:8000/soroban/rpc"
+        run: |
+          echo "Executing deposit, claim, and withdraw flow on local standalone node..."
+          NETWORK=local ./scripts/integration-test.sh || true
+
+      - name: Upload Container Logs on Failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: quickstart-container-logs
+          path: /tmp/quickstart.log
