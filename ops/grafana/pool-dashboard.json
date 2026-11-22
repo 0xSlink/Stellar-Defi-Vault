@@ -1,0 +1,40 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": 1,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "title": "Total Value Locked (TVL)",
+      "type": "stat",
+      "targets": [{ "expr": "vault_tvl_stroops / 10000000" }],
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 }
+    },
+    {
+      "title": "Reward Runway (Ledgers)",
+      "type": "gauge",
+      "targets": [{ "expr": "vault_runway_ledgers" }],
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 }
+    },
+    {
+      "title": "Pause Status",
+      "type": "stat",
+      "targets": [{ "expr": "vault_paused" }],
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 }
+    },
+    {
+      "title": "Share Price",
+      "type": "timeseries",
+      "targets": [{ "expr": "vault_share_price" }],
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 }
+    }
+  ],
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["stellar", "defi", "vault"],
+  "time": { "from": "now-6h", "to": "now" },
+  "title": "Stellar DeFi Vault Pool Overview"
+}

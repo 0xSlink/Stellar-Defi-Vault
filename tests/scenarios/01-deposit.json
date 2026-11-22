@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "name": "single deposit",
+  "steps": [
+    { "action": "deposit", "actor": "alice", "args": { "amount": 1000 } }
+  ],
+  "expected": [
+    { "type": "shares", "actor": "alice", "equals": 1000 },
+    { "type": "total_shares", "equals": 1000 }
+  ]
+}

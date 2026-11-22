@@ -9,9 +9,14 @@ pub fn get_shares(env: &Env, user: &Address) -> i128 {
 }
 
 pub fn set_shares(env: &Env, user: &Address, amount: i128) {
+    assert_non_negative(env, amount);
+    // Issue #699: extra reward tokens accrue per share, so settle them at the
+    // old share count before it changes.
+    crate::vault::multi_reward_tokens::settle_user(env, user);
     env.storage()
         .persistent()
         .set(&DataKey::ShareBalance(user.clone()), &amount);
+    crate::balance_checkpoints::record_user(env, user, amount);
 }
 
 pub fn get_total_shares(env: &Env) -> i128 {
@@ -22,7 +27,9 @@ pub fn get_total_shares(env: &Env) -> i128 {
 }
 
 pub fn set_total_shares(env: &Env, total: i128) {
+    assert_non_negative(env, total);
     env.storage().instance().set(&DataKey::TotalShares, &total);
+    crate::balance_checkpoints::record_total(env, total);
 }
 
 pub fn get_total_deposited(env: &Env) -> i128 {
@@ -33,6 +40,7 @@ pub fn get_total_deposited(env: &Env) -> i128 {
 }
 
 pub fn set_total_deposited(env: &Env, total: i128) {
+    assert_non_negative(env, total);
     env.storage()
         .instance()
         .set(&DataKey::TotalDeposited, &total);
@@ -62,10 +70,62 @@ pub fn set_reward_rate_bps(env: &Env, rate_bps: u32) {
         .set(&DataKey::RewardRateBps, &rate_bps);
 }
 
-pub fn get_rate_history(env: &Env) -> Vec<(u32, u32)> {
+pub fn get_reward_tiers(env: &Env) -> Vec<RewardTier> {
     env.storage()
         .instance()
-        .get(&DataKey::RateHistory)
+        .get(&symbol_short!("rwtiers"))
+        .unwrap_or(Vec::new(env))
+}
+
+pub fn set_reward_tiers(env: &Env, tiers: &Vec<RewardTier>) {
+    env.storage()
+        .instance()
+        .set(&symbol_short!("rwtiers"), tiers);
+}
+
+/// Get the maximum number of quizzes allowed.
+pub fn get_max_quizzes(_: &Env) -> u32 {
+    MAX_QUIZZES
+}
+
+/// Get quiz data by ID.
+pub fn get_quiz(env: &Env, quiz_id: u32) -> Option<Quiz> {
+    let key = (Symbol::new(env, "quiz"), quiz_id);
+    env.storage().persistent().get(&key)
+}
+
+/// Set quiz data by ID.
+pub fn set_quiz(env: &Env, quiz: &Quiz) {
+    let key = (Symbol::new(env, "quiz"), quiz.id);
+    env.storage().persistent().set(&key, quiz);
+}
+
+/// Get the number of remaining attempts for a user on a specific quiz.
+pub fn get_quiz_attempts_remaining(env: &Env, user: &Address, quiz_id: u32) -> u32 {
+    let key = (Symbol::new(env, "quiz_attempts"), user.clone(), quiz_id);
+    env.storage().persistent().get(&key).unwrap_or(0)
+}
+
+/// Returns `None` if the user has never had attempts initialized for this quiz
+/// (i.e. they haven't submitted a wrong answer yet), `Some(n)` otherwise.
+/// This lets callers distinguish between "not yet started" and "0 remaining".
+pub fn get_quiz_attempts_remaining_opt(env: &Env, user: &Address, quiz_id: u32) -> Option<u32> {
+    let key = (Symbol::new(env, "quiz_attempts"), user.clone(), quiz_id);
+    env.storage().persistent().get(&key)
+}
+
+/// Set the number of remaining attempts for a user on a specific quiz.
+pub fn set_quiz_attempts_remaining(env: &Env, user: &Address, quiz_id: u32, attempts: u32) {
+    let key = (Symbol::new(env, "quiz_attempts"), user.clone(), quiz_id);
+    env.storage().persistent().set(&key, &attempts);
+}
+
+/// Get the list of completed quiz IDs for a user.
+pub fn get_completed_quizzes(env: &Env, user: &Address) -> Vec<u32> {
+    let key = (Symbol::new(env, "completed_quizzes"), user.clone());
+    env.storage()
+        .persistent()
+        .get(&key)
         .unwrap_or(Vec::new(env))
 }
 
@@ -74,8 +134,69 @@ pub fn set_rate_history(env: &Env, history: &Vec<(u32, u32)>) {
 }
 
 pub const MAX_RATE_HISTORY_ENTRIES: u32 = 50;
+pub const MAX_QUIZZES: u32 = 20;
 
-pub fn get_reward_pool_balance(env: &Env) -> i128 {
+/// Maximum allowed reward rate in basis points (500% APR). Issue #72.
+pub const MAX_RATE_BPS: u32 = 50_000;
+
+// ── Issue #828: tiered reward rates by position size ──────────────────────────
+
+/// Configurable tiered reward rates based on stake bracket.
+///
+/// `tiers` is a `Vec<(min_amount, rate_bps)>`, sorted ascending by min_amount.
+/// Max 5 tiers. Each tier applies to stakes within its bracket:
+/// - Tier 0: stakes >= tiers[0].0 at rate tiers[0].1
+/// - Tier i: stakes >= tiers[i].0 and < tiers[i+1].0 at rate tiers[i].1
+/// - Highest tier: stakes >= last tier's min_amount at that rate
+/// Pass an empty Vec to use the base `reward_rate_bps`.
+pub fn set_rate_tiers(env: &Env, tiers: &Vec<(i128, u32)>) {
+    if tiers.len() > 5 {
+        return;
+    }
+    env.storage()
+        .instance()
+        .set(&symbol_short!("rate_tiers"), tiers);
+}
+
+/// Get the effective reward rate for a user's stake amount.
+///
+/// Returns the rate in basis points that applies to the user's position,
+/// considering the tiered rate configuration. If no tiers are configured,
+/// returns the base `reward_rate_bps`.
+pub fn get_effective_rate(env: &Env, amount: i128) -> u32 {
+    let tiers: Vec<(i128, u32)> = env
+        .storage()
+        .instance()
+        .get(&symbol_short!("rate_tiers"))
+        .unwrap_or(Vec::new(env));
+
+    if tiers.is_empty() {
+        return balance::get_reward_rate_bps(&env);
+    }
+
+    // Find the applicable tier for this amount
+    let mut rate_bps = tiers[0].1; // default to first tier rate
+    let mut found = false;
+
+    for i in 0..tiers.len() {
+        if amount >= tiers[i].0 {
+            rate_bps = tiers[i].1;
+            found = true;
+        } else {
+            break;
+        }
+    }
+
+    if found {
+        rate_bps
+    } else {
+        // Amount is below the first tier's minimum, use base rate
+        balance::get_reward_rate_bps(&env)
+    }
+}
+
+// pub fn get_reward_pool_balance(env: &Env) -> i128 {
+//
     env.storage()
         .instance()
         .get(&DataKey::RewardPoolBalance)
@@ -83,6 +204,7 @@ pub fn get_reward_pool_balance(env: &Env) -> i128 {
 }
 
 pub fn set_reward_pool_balance(env: &Env, balance: i128) {
+    assert_non_negative(env, balance);
     env.storage()
         .instance()
         .set(&DataKey::RewardPoolBalance, &balance);
@@ -103,7 +225,9 @@ pub fn get_pool_cap(env: &Env) -> i128 {
 }
 
 pub fn set_pool_cap(env: &Env, cap: i128) {
-    env.storage().instance().set(&DataKey::PoolCap, &cap);
+    env.storage()
+        .instance()
+        .set(&symbol_short!("pool_cp"), &cap);
 }
 
 pub fn get_unstake_fee_bps(env: &Env) -> u32 {
@@ -143,6 +267,7 @@ pub fn get_accrued_reward(env: &Env, user: &Address) -> i128 {
 }
 
 pub fn set_accrued_reward(env: &Env, user: &Address, amount: i128) {
+    assert_non_negative(env, amount);
     env.storage()
         .persistent()
         .set(&DataKey::AccruedReward(user.clone()), &amount);
@@ -187,6 +312,7 @@ pub fn get_total_rewards_paid(env: &Env) -> i128 {
 }
 
 pub fn set_total_rewards_paid(env: &Env, amount: i128) {
+    assert_non_negative(env, amount);
     env.storage()
         .instance()
         .set(&DataKey::TotalRewardsPaid, &amount);
@@ -217,24 +343,38 @@ pub fn remove_delegate(env: &Env, user: &Address) {
         .remove(&DataKey::Delegate(user.clone()));
 }
 
+// ── Issue #38: slash treasury ────────────────────────────────────────────────
+
+pub fn get_slash_treasury(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&symbol_short!("sl_tr"))
+}
+
+pub fn set_slash_treasury(env: &Env, treasury: &Address) {
+    env.storage()
+        .instance()
+        .set(&symbol_short!("sl_tr"), treasury);
+}
+
 // ── Issue #39: reward token ───────────────────────────────────────────────────
 
 pub fn get_reward_token(env: &Env) -> Option<Address> {
-    env.storage().instance().get(&DataKey::RewardToken)
+    env.storage().instance().get(&symbol_short!("rwd_tok"))
 }
 
 pub fn set_reward_token(env: &Env, token: &Address) {
-    env.storage().instance().set(&DataKey::RewardToken, token);
+    env.storage()
+        .instance()
+        .set(&symbol_short!("rwd_tok"), token);
 }
 
 // ── Issue #40: NFT contract ───────────────────────────────────────────────────
 
 pub fn get_nft_contract(env: &Env) -> Option<Address> {
-    env.storage().instance().get(&DataKey::NftContract)
+    env.storage().instance().get(&symbol_short!("nft_con"))
 }
 
 pub fn set_nft_contract(env: &Env, nft: &Address) {
-    env.storage().instance().set(&DataKey::NftContract, nft);
+    env.storage().instance().set(&symbol_short!("nft_con"), nft);
 }
 
 // ── Issue #41: restake grace window ──────────────────────────────────────────
@@ -310,7 +450,9 @@ pub fn get_claim_cap(env: &Env) -> i128 {
 }
 
 pub fn set_claim_cap(env: &Env, cap: i128) {
-    env.storage().instance().set(&DataKey::ClaimCap, &cap);
+    env.storage()
+        .instance()
+        .set(&symbol_short!("clm_cap"), &cap);
 }
 
 pub fn get_claim_cap_window(env: &Env) -> u32 {
@@ -323,7 +465,7 @@ pub fn get_claim_cap_window(env: &Env) -> u32 {
 pub fn set_claim_cap_window(env: &Env, window_ledgers: u32) {
     env.storage()
         .instance()
-        .set(&DataKey::ClaimCapWindow, &window_ledgers);
+        .set(&symbol_short!("clm_win"), &window_ledgers);
 }
 
 pub fn get_user_claim_window(env: &Env, user: &Address) -> Option<ClaimWindow> {
@@ -347,27 +489,27 @@ pub const DEFAULT_TOKEN_DECIMALS: u32 = 7;
 pub fn get_stake_decimals(env: &Env) -> u32 {
     env.storage()
         .instance()
-        .get(&DataKey::StakeDecimals)
+        .get(&symbol_short!("stk_dec"))
         .unwrap_or(DEFAULT_TOKEN_DECIMALS)
 }
 
 pub fn set_stake_decimals(env: &Env, decimals: u32) {
     env.storage()
         .instance()
-        .set(&DataKey::StakeDecimals, &decimals);
+        .set(&symbol_short!("stk_dec"), &decimals);
 }
 
 pub fn get_reward_decimals(env: &Env) -> u32 {
     env.storage()
         .instance()
-        .get(&DataKey::RewardDecimals)
+        .get(&symbol_short!("rwd_dec"))
         .unwrap_or(DEFAULT_TOKEN_DECIMALS)
 }
 
 pub fn set_reward_decimals(env: &Env, decimals: u32) {
     env.storage()
         .instance()
-        .set(&DataKey::RewardDecimals, &decimals);
+        .set(&symbol_short!("rwd_dec"), &decimals);
 }
 
 // ── All-stakers list (issue #95) ──────────────────────────────────────────────
@@ -383,28 +525,86 @@ pub fn set_all_stakers(env: &Env, stakers: &Vec<Address>) {
     env.storage().instance().set(&DataKey::AllStakers, stakers);
 }
 
+/// Records `user` in the staker registry if they are not already present and
+/// refreshes the `total_stakers` count. Idempotent, so callers can invoke it on
+/// every stake without worrying about duplicates. Keeps the registry (and thus
+/// `get_pool_summary().depositor_count`) in sync with real depositors.
+pub fn register_staker(env: &Env, user: &Address) {
+    let mut stakers = get_all_stakers(env);
+    let already_present = stakers.iter().any(|a| &a == user);
+    if !already_present {
+        stakers.push_back(user.clone());
+        env.storage()
+            .instance()
+            .set(&DataKey::AllStakers, &stakers);
+    }
+    env.storage()
+        .instance()
+        .set(&DataKey::TotalStakers, &stakers.len());
+}
+
 // ── Share math ────────────────────────────────────────────────────────────────
 
 /// Convert a deposit amount to shares using current vault ratio.
-/// First deposit: 1:1. Subsequent: proportional to existing pool.
+/// First deposit: scale the token amount into the vault's fixed share
+/// precision. Subsequent deposits are proportional to the existing pool.
 pub fn amount_to_shares(total_shares: i128, total_deposited: i128, amount: i128) -> Option<i128> {
+    amount_to_shares_with_decimals(total_shares, total_deposited, amount, DEFAULT_TOKEN_DECIMALS)
+}
+
+/// Convert token base units to shares. Shares intentionally use seven decimal
+/// places, while the underlying token may use a different precision. The
+/// decimal argument is the precision queried from the configured token.
+pub fn amount_to_shares_with_decimals(
+    total_shares: i128,
+    total_deposited: i128,
+    amount: i128,
+    token_decimals: u32,
+) -> Option<i128> {
     if total_shares == 0 || total_deposited == 0 {
-        Some(amount)
+        scale_amount(amount, token_decimals, DEFAULT_TOKEN_DECIMALS)
     } else {
-        amount
-            .checked_mul(total_shares)?
-            .checked_div(total_deposited)
+        // Issue #784: `amount * total_shares` can overflow i128 for a large
+        // pool even though the final share count fits comfortably, since
+        // `amount <= total_deposited` in the normal case. `mul_div_floor`
+        // computes the exact 256-bit product first, so it only reports
+        // overflow when the final quotient itself doesn't fit — matching
+        // this function's previous truncating-division (floor) rounding.
+        crate::math::mul_div_floor(amount, total_shares, total_deposited).ok()
     }
 }
 
 /// Convert shares to the underlying token amount.
 pub fn shares_to_amount(total_shares: i128, total_deposited: i128, shares: i128) -> Option<i128> {
+    shares_to_amount_with_decimals(total_shares, total_deposited, shares, DEFAULT_TOKEN_DECIMALS)
+}
+
+/// Convert shares in the fixed seven-decimal share precision to underlying
+/// token base units. The ratio already includes the initial decimal scaling.
+pub fn shares_to_amount_with_decimals(
+    total_shares: i128,
+    total_deposited: i128,
+    shares: i128,
+    _token_decimals: u32,
+) -> Option<i128> {
     if total_shares == 0 {
         Some(0)
     } else {
-        shares
-            .checked_mul(total_deposited)?
-            .checked_div(total_shares)
+        // Issue #784: see `amount_to_shares_with_decimals` above — same
+        // overflow-prone pattern, same fix, same preserved floor rounding.
+        crate::math::mul_div_floor(shares, total_deposited, total_shares).ok()
+    }
+}
+
+fn scale_amount(amount: i128, from_decimals: u32, to_decimals: u32) -> Option<i128> {
+    if from_decimals == to_decimals {
+        return Some(amount);
+    }
+
+    if from_decimals < to_decimals {
+        amount.checked_mul(10_i128.checked_pow(to_decimals - from_decimals)?)
+    } else {
+        amount.checked_div(10_i128.checked_pow(from_decimals - to_decimals)?)
     }
 }
 
@@ -416,9 +616,26 @@ pub fn get_reward_remainder(env: &Env, user: &Address) -> i128 {
 }
 
 pub fn set_reward_remainder(env: &Env, user: &Address, amount: i128) {
+    assert_non_negative(env, amount);
     env.storage()
         .persistent()
         .set(&DataKey::RewardRemainder(user.clone()), &amount);
+}
+
+// ── Issue #69: last updated ledger ───────────────────────────────────────────
+// Uses symbol_short! to avoid pushing DataKey over the contracttype variant limit.
+
+pub fn get_last_updated_ledger(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&symbol_short!("lst_upd"))
+        .unwrap_or(0)
+}
+
+pub fn set_last_updated_ledger(env: &Env, ledger: u32) {
+    env.storage()
+        .instance()
+        .set(&symbol_short!("lst_upd"), &ledger);
 }
 
 // ── Issue #97: pool description ──────────────────────────────────────────────

@@ -1,0 +1,71 @@
+name-template: "v$RESOLVED_VERSION"
+tag-template: "v$RESOLVED_VERSION"
+template: |
+  > **Maintainer Review Required:** This release draft was generated automatically from merged PR labels. Review all categorized entries, verify the version bump, and update `CHANGELOG.md` / `Cargo.toml` before publishing.
+
+  ## What's Changed
+
+  $CHANGES
+
+  **Full Changelog**: https://github.com/$OWNER/$REPOSITORY/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
+
+categories:
+  - title: "Breaking Changes"
+    labels:
+      - "breaking"
+      - "breaking-change"
+      - "semver:major"
+  - title: "Security"
+    labels:
+      - "security"
+      - "audit"
+  - title: "Features"
+    labels:
+      - "enhancement"
+      - "feature"
+      - "feat"
+  - title: "Bug Fixes"
+    labels:
+      - "bug"
+      - "fix"
+      - "bugfix"
+  - title: "Documentation"
+    labels:
+      - "documentation"
+      - "docs"
+  - title: "Dependencies & Maintenance"
+    labels:
+      - "dependencies"
+      - "chore"
+      - "ci"
+      - "maintenance"
+
+change-template: "- $TITLE @$AUTHOR (#$NUMBER)"
+no-changes-template: "* No changes"
+
+version-resolver:
+  major:
+    labels:
+      - "breaking"
+      - "breaking-change"
+      - "semver:major"
+  minor:
+    labels:
+      - "enhancement"
+      - "feature"
+      - "feat"
+      - "semver:minor"
+  patch:
+    labels:
+      - "bug"
+      - "fix"
+      - "bugfix"
+      - "security"
+      - "documentation"
+      - "docs"
+      - "dependencies"
+      - "chore"
+      - "ci"
+      - "maintenance"
+      - "semver:patch"
+  default: patch
