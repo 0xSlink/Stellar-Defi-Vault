@@ -9839,7 +9839,10 @@ impl VaultContract {
                 return Err(VaultError::PositionNotFound);
             }
         }
-        if balance::get_open_proposal_count(&env) >= MAX_OPEN_PROPOSALS {
+        crate::proposal_limits::check_proposal_limits(&env, &user);
+        if crate::proposal_limits::max_active_limit(&env) == 0
+            && balance::get_open_proposal_count(&env) >= MAX_OPEN_PROPOSALS
+        {
             return Err(VaultError::MaxPositionsReached);
         }
 
@@ -9871,6 +9874,7 @@ impl VaultContract {
         proposal_cancel::record_proposal_created(&env, id, &user, created_at, bond_paid);
 
         balance::set_proposal(&env, id, &proposal);
+        crate::proposal_limits::record_proposal_active(&env, id, &user);
         // Issue #712: freeze the quorum/threshold that apply to this proposal.
         crate::governance_params::snapshot(&env, id);
         // Freeze the governance source (stake / token / both) for this proposal.
@@ -10073,6 +10077,7 @@ impl VaultContract {
         if open_count > 0 {
             balance::set_open_proposal_count(&env, open_count - 1);
         }
+        crate::proposal_limits::mark_proposal_terminal(&env, proposal_id);
         events::proposal_enacted(
             &env,
             proposal_id,
@@ -11319,6 +11324,11 @@ impl VaultContract {
         }
 
         balance::set_proposal_vetoer(&env, proposal_id, &user);
+        crate::proposal_limits::mark_proposal_terminal(&env, proposal_id);
+        let open_count = balance::get_open_proposal_count(&env);
+        if open_count > 0 {
+            balance::set_open_proposal_count(&env, open_count - 1);
+        }
         events::proposal_vetoed(&env, &user, proposal_id, stake_bps, env.ledger().sequence());
         Ok(())
     }
@@ -15497,6 +15507,8 @@ pub mod proposal_requirements;
 pub mod proposal_state;
 #[path = "proposal_window.rs"]
 pub mod proposal_window;
+#[path = "proposal_limits.rs"]
+pub mod proposal_limits;
 #[path = "reward_projection.rs"]
 pub mod reward_projection;
 #[path = "reward_window.rs"]

@@ -126,8 +126,8 @@ pub fn proposal_state(env: &Env, id: u32) -> Option<ProposalState> {
         });
     }
 
-    // 4. Vetoed but not yet enacted (guardian stepped in).
-    if guardian_veto::is_vetoed(env, id) {
+    // 4. Vetoed but not yet enacted (guardian or stake-weighted veto).
+    if guardian_veto::is_vetoed(env, id) || balance::get_proposal_vetoer(env, id).is_some() {
         return Some(ProposalState::Vetoed);
     }
 

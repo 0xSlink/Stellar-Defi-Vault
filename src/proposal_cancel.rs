@@ -238,6 +238,7 @@ impl VaultContract {
         if open_count > 0 {
             balance::set_open_proposal_count(&env, open_count - 1);
         }
+        crate::proposal_limits::mark_proposal_terminal(&env, proposal_id);
 
         if meta.bond_paid > 0 {
             let token_addr =
