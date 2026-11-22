@@ -102,6 +102,10 @@ deployment record.
   cursor advances and survives a restart.
 - [ ] Reconcile contract balances and total deposited/reward accounting with
   the deployment record before enabling deposits.
+- [ ] Run the pre-release invariant sweep after every deploy and upgrade:
+  `CONTRACT_ID=<id> RPC_URL=<url> npx tsx scripts/invariant-sweep.ts --start-ledger <deploy_ledger>`
+  and confirm all on-chain (`assert_invariants`, `pool_health_report`,
+  `get_solvency_report`) and off-chain event-recomputation checks pass.
 
 ## Monitoring
 

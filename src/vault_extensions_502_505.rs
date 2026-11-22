@@ -223,12 +223,16 @@ impl VaultContract {
         if pending > 0 {
             balance::set_accrued_reward(&env, &user, 0);
 
+            let token_addr = VaultContract::token_address(&env)?;
+            let (net_pending, reward_fee_amount) =
+                crate::reward_fee::apply_reward_fee(&env, &user, &token_addr, pending)?;
+
             let total_shares = balance::get_total_shares(&env);
             let total_deposited = balance::get_total_deposited(&env);
             let shares = if total_deposited == 0 {
-                pending
+                net_pending
             } else {
-                pending
+                net_pending
                     .checked_mul(total_shares)
                     .and_then(|value| value.checked_div(total_deposited))
                     .ok_or(PublicApiError::ArithmeticError)?
@@ -236,10 +240,13 @@ impl VaultContract {
 
             balance::set_shares(&env, &user, balance::get_shares(&env, &user) + shares);
             balance::set_total_shares(&env, total_shares + shares);
-            balance::set_total_deposited(&env, total_deposited + pending);
+            balance::set_total_deposited(&env, total_deposited + net_pending);
 
-            env.events().publish((Symbol::new(&env, "compounded"),), (user, pending, shares, env.ledger().sequence()));
+            env.events().publish((Symbol::new(&env, "compounded"),), (user.clone(), net_pending, shares, env.ledger().sequence()));
+            crate::claim_receipts::record_receipt(&env, &user, net_pending, &token_addr, &user, reward_fee_amount);
         }
+        crate::ttl_management::bump(&env);
+        crate::user_ttl::bump_entries(&env, &user);
         Ok(())
     }
 

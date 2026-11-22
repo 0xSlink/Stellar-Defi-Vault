@@ -113,6 +113,7 @@ pub fn passes(
     Ok(support >= needed)
 }
 
+#[cfg(feature = "governance")]
 #[cfg_attr(not(feature = "testutils"), contractimpl)]
 impl VaultContract {
     /// Admin: set the quorum and pass threshold for proposals created from now

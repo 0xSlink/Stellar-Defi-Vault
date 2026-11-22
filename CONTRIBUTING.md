@@ -47,11 +47,12 @@ The compiled `.wasm` file will be at `target/wasm32-unknown-unknown/release/stel
 ## How to Contribute (Wave Program)
 
 1. Browse open issues tagged **`Stellar Wave`** at [drips.network/wave/stellar](https://www.drips.network/wave/stellar/issues).
-2. Apply for an issue through the Drips Wave app.
-3. Wait to be **assigned** before starting work — do not open a PR before assignment.
-4. Fork the repo, create a branch named `fix/<issue-number>-short-description` or `feat/<issue-number>-short-description`.
-5. Open a PR with `Closes #<issue-number>` in the description so the Drips bot can track it.
-6. Respond promptly to review feedback — the Wave window is short.
+2. For newcomer-friendly tasks, start with the curated [`good first issue` list](https://github.com/Rickyy1017/Stellar-Defi-Vault/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
+3. Apply for an issue through the Drips Wave app.
+4. Wait to be **assigned** before starting work — do not open a PR before assignment.
+5. Fork the repo, create a branch named `fix/<issue-number>-short-description` or `feat/<issue-number>-short-description`.
+6. Open a PR with `Closes #<issue-number>` in the description so the Drips bot can track it.
+7. Respond promptly to review feedback — the Wave window is short.
 
 ## Code Style
 

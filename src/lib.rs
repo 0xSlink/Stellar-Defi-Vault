@@ -9,6 +9,9 @@
 // contract must not. Forbidding it crate-wide also keeps unsafe blocks out of
 // the test-only code that shares this crate.
 #![forbid(unsafe_code)]
+// Issue #922: contract code must use typed error handling. Test code is excluded
+// because test helpers may deliberately exercise panic behavior.
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing))]
 // Issue #675: every public item should be documented. Left at `warn` while the
 // existing ~1,000 undocumented items are worked through; flip to `deny` once
 // `cargo doc` is clean.
@@ -25,6 +28,7 @@ pub mod interface;
 mod math;
 pub mod nft;
 pub mod reward_accumulator;
+pub mod reward_fee;
 mod reward_math;
 mod storage;
 pub mod ttl_management;
@@ -35,6 +39,7 @@ pub mod commitment;
 pub mod content_curation;
 pub mod insurance;
 pub mod nft_fractionalize;
+#[cfg(feature = "mirroring")]
 pub mod position_mirroring;
 pub mod price_oracle;
 pub mod reputation_decay;
@@ -58,13 +63,16 @@ pub mod position_health_auto_recovery; // issue #459 â€” position health au
 pub mod position_value_appreciation_log; // issue #469 â€” position value appreciation log
 pub mod proof_of_humanity_hook; // issue #461 â€” proof-of-humanity hook
 pub mod reward_token_audit_trail; // issue #467 â€” reward token audit trail
+#[cfg(feature = "governance")]
 pub mod roadmap_voting; // issue #462 â€” roadmap voting
 pub mod stake_funded_bug_bounty; // issue #468 â€” stake-funded bug bounty
 pub mod stake_hooks; // issue #711 â€” stake and unstake hook contracts
 pub mod staker_favor_rounding; // issue #457 â€” always round in the staker's favor
+#[cfg(any(feature = "referrals", feature = "mirroring"))]
 pub mod staker_network_graph; // issue #456 â€” staker delegation/referral/mirror network graph
 pub mod time_locked_admin_proposal; // issue #455 -- time-locked admin config-change announcements
 pub mod vault_extensions_463_466; // issues #463-#466 â€” clawback, NFT boost, milestone, param log
+#[cfg(feature = "strategies")]
 pub mod vault_extensions_765_768; // issues #765-#768 â€” idle buffer, harvest, loss policy, emergency unwind
 pub mod vesting_cliff; // issue #287 â€” reward vesting cliff // reward-token price peg stabilization
 
@@ -78,6 +86,9 @@ mod test_issues_757_760;
 
 #[cfg(test)]
 mod test_admin_contract_auth;
+
+#[cfg(test)]
+mod test_passkey_account;
 
 #[cfg(test)]
 mod test_withdrawal_cooldown;
@@ -131,11 +142,15 @@ mod test_issues_459_462;
 mod test_peg_stabilization;
 
 #[cfg(test)]
+#[cfg(feature = "governance")]
 mod test_issues_709_712;
 
 // â”€â”€ Issue #659: storage-layout upgrade-safety snapshot â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 #[cfg(test)]
 mod test_storage_layout;
+
+#[cfg(test)]
+mod test_error_codes;
 
 // â”€â”€ Issue #660: resource-footprint limits for batch/loop entrypoints â”€â”€â”€â”€â”€â”€â”€â”€â”€
 #[cfg(test)]

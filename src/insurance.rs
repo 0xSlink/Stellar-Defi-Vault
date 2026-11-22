@@ -68,6 +68,15 @@ fn set_reserve(env: &Env, amount: i128) {
     env.storage().instance().set(&RESERVE_KEY, &amount);
 }
 
+/// Crate-internal: credit `amount` to the insurance reserve (e.g. from
+/// operator slashing).
+pub(crate) fn add_to_reserve(env: &Env, amount: i128) {
+    if amount > 0 {
+        let current = get_reserve(env);
+        set_reserve(env, current.saturating_add(amount));
+    }
+}
+
 /// The ledger at which insolvency was declared, if it has been.
 pub fn insolvency_ledger(env: &Env) -> Option<u32> {
     env.storage().instance().get(&INSOLVENT_KEY)

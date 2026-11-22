@@ -100,3 +100,11 @@ if [ -d "contracts/test-faucet" ]; then
     fi
 fi
 
+# 7. Run post-deploy invariant sweep (issue #950)
+if command -v npx >/dev/null 2>&1; then
+    echo "Running post-deploy invariant sweep..."
+    npx tsx scripts/invariant-sweep.ts --contract-id "$CONTRACT_ID"
+else
+    echo "Warning: npx not found; run 'npx tsx scripts/invariant-sweep.ts --contract-id $CONTRACT_ID' manually."
+fi
+

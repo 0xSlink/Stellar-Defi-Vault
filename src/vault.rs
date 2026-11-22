@@ -1,6 +1,6 @@
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token, Address, Bytes,
-    Env, String, Symbol, Vec,
+    Env, IntoVal, String, Symbol, Val, Vec,
 };
 
 use crate::{
@@ -202,6 +202,18 @@ soroban_sdk::contractmeta!(key = "version", val = "0.1.0");
 soroban_sdk::contractmeta!(
     key = "description",
     val = "A staking pool contract for Stellar DeFi vault positions."
+);
+soroban_sdk::contractmeta!(
+    key = "security_contact",
+    val = "https://github.com/Rickyy1017/Stellar-Defi-Vault/security/advisories/new"
+);
+soroban_sdk::contractmeta!(
+    key = "source_repo",
+    val = "https://github.com/Rickyy1017/Stellar-Defi-Vault"
+);
+soroban_sdk::contractmeta!(
+    key = "security_policy_url",
+    val = "https://github.com/Rickyy1017/Stellar-Defi-Vault/blob/main/docs/SECURITY.md"
 );
 
 const REENTRANCY_KEY: Symbol = symbol_short!("re_entry");
@@ -485,6 +497,7 @@ impl VaultContract {
         crate::vault_extensions_546_549::maybe_lock_deposit(&env, &user, amount, shares_minted);
 
         // Issue #453: trigger mirroring for followers
+        #[cfg(feature = "mirroring")]
         crate::position_mirroring::maybe_mirror_action(&env, &user, symbol_short!("stake"), amount);
 
         crate::activity_log::record(
@@ -655,6 +668,7 @@ impl VaultContract {
             received,
             shares_minted,
         );
+        #[cfg(feature = "mirroring")]
         crate::position_mirroring::maybe_mirror_action(
             &env,
             &receiver,
@@ -704,6 +718,7 @@ impl VaultContract {
     }
 
     /// Admin: configure referral rewards in basis points of the first deposit.
+    #[cfg(feature = "referrals")]
     pub fn set_referral_bonus_bps(
         env: Env,
         admin_addr: Address,
@@ -775,6 +790,7 @@ impl VaultContract {
         let old_rate = balance::get_reward_rate_bps(&env);
         balance::set_reward_rate_bps(&env, rate_bps);
         balance::record_rate_change(&env, old_rate, rate_bps);
+        crate::ttl_management::bump(&env);
         Ok(())
     }
 
@@ -1034,6 +1050,9 @@ impl VaultContract {
         balance::set_total_shares(&env, total_shares - shares);
         balance::set_total_deposited(&env, total_deposited - amount_returned);
         balance::set_accrued_reward(&env, &user, 0);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::StakedAtLedger(user.clone()));
         events::emergency_withdrawal(
             &env,
             &user,
@@ -1412,16 +1431,22 @@ impl VaultContract {
                 .ok_or(VaultError::ArithmeticError)?,
         );
 
-        let bounty_contribution =
-            crate::stake_funded_bug_bounty::deduct_bounty_contribution(&env, &staker, amount);
-        let reward_after_bounty = amount.saturating_sub(bounty_contribution);
+        let reward_token_addr = Self::reward_token_address(&env)?;
+        let (amount_after_reward_fee, reward_fee_amount) =
+            crate::reward_fee::apply_reward_fee(&env, &staker, &reward_token_addr, amount)?;
+        let bounty_contribution = crate::stake_funded_bug_bounty::deduct_bounty_contribution(
+            &env,
+            &staker,
+            amount_after_reward_fee,
+        );
+        let reward_after_bounty = amount_after_reward_fee.saturating_sub(bounty_contribution);
         let user_payout = crate::claim_fee::apply_claim_fee(&env, &staker, reward_after_bounty)?;
         // Deduct mirror performance fee when the follower has opted in; net
         // payout to the follower is reduced and the fee goes directly to the leader.
+        #[cfg(feature = "mirroring")]
         let user_payout =
             crate::position_mirroring::apply_mirror_perf_fee(&env, &staker, user_payout)?;
 
-        let reward_token_addr = Self::reward_token_address(&env)?;
         if user_payout > 0 {
             token::Client::new(&env, &reward_token_addr).transfer(
                 &env.current_contract_address(),
@@ -1446,8 +1471,11 @@ impl VaultContract {
             user_payout,
             &reward_token_addr,
             &staker,
+            reward_fee_amount,
         );
         balance::set_last_claim_action_ledger(&env, &staker, env.ledger().sequence());
+        crate::ttl_management::bump(&env);
+        crate::user_ttl::bump_entries(&env, &staker);
         Ok(user_payout)
     }
 
@@ -2266,7 +2294,7 @@ impl VaultContract {
     /// each share directly (unlike `redistribute_penalty`'s pending-balance
     /// credit ΓÇö issue #197 asks for these to be paid out, not accrued).
     /// Rounding dust goes to the first recipient (per the issue's notes).
-    fn distribute_fee(
+    pub(crate) fn distribute_fee(
         env: &Env,
         token_addr: &Address,
         fee_amount: i128,
@@ -3306,6 +3334,58 @@ impl VaultContract {
         crate::community_treasury::get_community_treasury_balance(&env)
     }
 
+    /// Read-only: tracked treasury balance for a specific token (issue #945).
+    pub fn get_treasury_balance(env: Env, token: Address) -> i128 {
+        balance::get_treasury_balance(&env, &token)
+    }
+
+    /// Read-only: tokens with tracked treasury balances (issue #945).
+    /// Bounded by the number of distinct tokens routed to the treasury.
+    pub fn list_treasury_tokens(env: Env) -> Vec<Address> {
+        balance::list_treasury_tokens(&env)
+    }
+
+    /// Admin: withdraw a tracked treasury token balance to `to` (issue #945).
+    /// Limited to the tracked balance for `token`.
+    pub fn withdraw_treasury(
+        env: Env,
+        admin: Address,
+        token: Address,
+        amount: i128,
+        to: Address,
+    ) -> Result<(), VaultError> {
+        admin::require_admin_as(&env, &admin)?;
+        if amount <= 0 {
+            return Err(VaultError::ZeroAmount);
+        }
+        let tracked = balance::get_treasury_balance(&env, &token);
+        if amount > tracked {
+            return Err(VaultError::InsufficientRewardPool);
+        }
+
+        token::Client::new(&env, &token).transfer(
+            &env.current_contract_address(),
+            &to,
+            &amount,
+        );
+        balance::set_treasury_balance(&env, &token, tracked - amount);
+
+        let stake_token = Self::token_address(&env)?;
+        if token == stake_token {
+            let ct = crate::community_treasury::get_community_treasury_balance(&env);
+            crate::community_treasury::set_community_treasury_balance(
+                &env,
+                (ct - amount).max(0),
+            );
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "treas_wd"), admin.clone()),
+            (token, to, amount, env.ledger().sequence()),
+        );
+        Ok(())
+    }
+
     pub fn get_spending_proposal(
         env: Env,
         proposal_id: u32,
@@ -3671,6 +3751,7 @@ impl VaultContract {
         }
         // Issue #548: same large-deposit lock as `stake`.
         crate::vault_extensions_546_549::maybe_lock_deposit(env, user, amount, shares);
+        #[cfg(feature = "mirroring")]
         crate::position_mirroring::maybe_mirror_action(env, user, symbol_short!("stake"), amount);
         crate::activity_log::record(
             env,
@@ -3713,16 +3794,20 @@ impl VaultContract {
             .ok_or(VaultError::ArithmeticError)?;
         let token_addr = Self::token_address(env)?;
         let token_client = token::Client::new(env, &token_addr);
-        let current_idle = token_client.balance(&env.current_contract_address());
-        if current_idle < amount {
-            let needed = amount - current_idle;
-            let _ = crate::vault_extensions_765_768::pull_from_strategies(env, needed);
+        #[cfg(feature = "strategies")]
+        {
+            let current_idle = token_client.balance(&env.current_contract_address());
+            if current_idle < amount {
+                let needed = amount - current_idle;
+                let _ = crate::vault_extensions_765_768::pull_from_strategies(env, needed);
+            }
         }
         token_client.transfer(&env.current_contract_address(), staker, &amount);
         balance::set_shares(env, staker, user_shares - shares);
         balance::set_total_shares(env, total_shares - shares);
         balance::set_total_deposited(env, total_deposited - amount);
         // Issue #453: trigger mirroring for unstake
+        #[cfg(feature = "mirroring")]
         crate::position_mirroring::maybe_mirror_action(
             env,
             staker,
@@ -4306,6 +4391,7 @@ impl VaultContract {
     /// refers B, then B refers A).
     ///
     /// `root` is always returned, even with no referrals of its own.
+    #[cfg(feature = "referrals")]
     pub fn referral_tree_data(
         env: Env,
         root: Address,
@@ -4757,8 +4843,9 @@ impl VaultContract {
         Ok(())
     }
 
-    fn effective_rate_bps_for_window(env: &Env, start_ledger: u32, end_ledger: u32) -> u32 {
-        let base_rate = balance::get_reward_rate_bps(env);
+    fn effective_rate_bps_for_window(env: &Env, user: &Address, start_ledger: u32, end_ledger: u32) -> u32 {
+        let current_shares = balance::get_shares(env, user);
+        let base_rate = balance::get_effective_rate(env, current_shares);
         if end_ledger <= start_ledger {
             return base_rate;
         }
@@ -4903,6 +4990,7 @@ impl VaultContract {
         let admin_actual = admin::get_admin(&env)?;
         events::admin_action_fund_reward_pool(&env, &admin_actual, amount);
         balance::increment_admin_action_count(&env);
+        crate::ttl_management::bump(&env);
 
         Ok(())
     }
@@ -6885,17 +6973,23 @@ impl VaultContract {
             .instance()
             .get(&DataKey::EarlyExitPenaltyBps)
             .unwrap_or(0);
+        // Issue #827: early unlock penalty (declining penalty for exiting before lock expires)
+        let early_unlock_penalty_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&symbol_short!("early_ublk"))
+            .unwrap_or(0);
 
         let current_ledger = env.ledger().sequence();
+        let staked_at = env
+            .storage()
+            .persistent()
+            .get::<_, u32>(&DataKey::StakedAtLedger(staker.clone()));
         let is_locked = if lock_period == 0 {
             false
         } else {
-            match env
-                .storage()
-                .persistent()
-                .get::<_, u32>(&DataKey::StakedAtLedger(staker.clone()))
-            {
-                Some(staked_at) => current_ledger < staked_at.saturating_add(lock_period),
+            match staked_at {
+                Some(staked_at_ledger) => current_ledger < staked_at_ledger.saturating_add(lock_period),
                 None => false,
             }
         };
@@ -6903,21 +6997,61 @@ impl VaultContract {
         // Issue #41: restaked positions are exempt from early-exit penalty for one unstake cycle
         // Issue #41: restaked positions are exempt from early-exit penalty for one unstake cycle
         let is_restaked = balance::is_restaked(env, staker);
-        // Issue #240: a triggered oracle price condition waives the penalty too.
-        let is_lockup_waived = balance::is_lockup_waived(env, staker);
-        // Issue #243: a purchased insurance policy waives it outright.
-        let is_insured = balance::is_position_insured(env, staker);
-        let amount_after_penalty =
-            if is_restaked || is_lockup_waived || is_insured || !is_locked || penalty_bps == 0 {
-                amount
+
+        // Issue #827: compute post-penalty amount considering both lock penalty and early unlock penalty
+        // Lock penalty (EarlyExitPenaltyBps) applies if still locked
+        // Early unlock penalty (early_ublk) applies if before lock expires
+        let is_still_locked = lock_period > 0 && is_locked;
+        let is_early_unlock = lock_period > 0 && current_ledger < staked_at.saturating_add(lock_period);
+
+        let amount_after_penalty = if is_restaked || !is_still_locked && !is_early_unlock {
+            // No penalty applies
+            amount
+        } else {
+            // Apply the applicable penalty
+            let (penalty_bps_to_use, early_ublk_bps_to_use) = if is_early_unlock && is_still_locked {
+                // Both penalties could apply; combine them proportionally
+                // For simplicity: early unlock takes precedence if before lock expiry
+                (0, early_unlock_penalty_bps)
+            } else if is_early_unlock {
+                (0, early_unlock_penalty_bps)
+            } else if is_still_locked {
+                (penalty_bps, 0)
             } else {
+                (0, 0)
+            };
+
+            let mut post_penalty = amount;
+            if penalty_bps_to_use > 0 {
                 let penalty = amount
-                    .checked_mul(penalty_bps as i128)
+                    .checked_mul(penalty_bps_to_use as i128)
                     .ok_or(VaultError::ArithmeticError)?
                     .checked_div(BOOST_BPS_BASE as i128)
                     .ok_or(VaultError::ArithmeticError)?;
-                amount - penalty
-            };
+                post_penalty = amount - penalty;
+            }
+            if early_ublk_bps_to_use > 0 {
+                let early_penalty = post_penalty
+                    .checked_mul(early_ublk_bps_to_use as i128)
+                    .ok_or(VaultError::ArithmeticError)?
+                    .checked_div(BOOST_BPS_BASE as i128)
+                    .ok_or(VaultError::ArithmeticError)?;
+                post_penalty = post_penalty - early_penalty;
+            }
+            // Distribute the forfeited amount to the reward pool (Issue #826)
+            if early_ublk_bps_to_use > 0 || penalty_bps_to_use > 0 {
+                // Calculate forfeited amount: the total penalty collected
+                let forfeited = amount
+                    .checked_sub(post_penalty)
+                    .ok_or(VaultError::ArithmeticError)?;
+                if forfeited > 0 {
+                    balance::distribute_forfeit(env, forfeited);
+                }
+            }
+            post_penalty
+        };
+
+        // ... rest of the function continues
 
         // Unstake fee: charged on the post-penalty amount returned to the user
         // and routed to the reward pool treasury (not burned). Applied after the
@@ -6989,6 +7123,7 @@ impl VaultContract {
                 if recipients.is_empty() {
                     let reward_pool = balance::get_reward_pool_balance(env);
                     balance::set_reward_pool_balance(env, reward_pool + treasury_fee);
+                    balance::add_treasury_balance(env, &token_addr, treasury_fee);
                 } else {
                     Self::distribute_fee(env, &token_addr, treasury_fee, &recipients);
                 }
@@ -7025,10 +7160,13 @@ impl VaultContract {
         Self::append_stake_history(env, staker, StakeAction::Unstake, amount_returned);
 
         let token_client = token::Client::new(env, &token_addr);
-        let current_idle = token_client.balance(&env.current_contract_address());
-        if current_idle < amount_returned {
-            let needed = amount_returned - current_idle;
-            let _ = crate::vault_extensions_765_768::pull_from_strategies(env, needed);
+        #[cfg(feature = "strategies")]
+        {
+            let current_idle = token_client.balance(&env.current_contract_address());
+            if current_idle < amount_returned {
+                let needed = amount_returned - current_idle;
+                let _ = crate::vault_extensions_765_768::pull_from_strategies(env, needed);
+            }
         }
         token_client.transfer(&env.current_contract_address(), recipient, &amount_returned);
 
@@ -7060,6 +7198,8 @@ impl VaultContract {
 
         // Issue #711: notify registered hooks once the unstake is finalized.
         crate::stake_hooks::notify(env, staker, symbol_short!("unstake"), amount_returned);
+        crate::ttl_management::bump(env);
+        crate::user_ttl::bump_entries(env, staker);
 
         Ok(amount_returned)
     }
@@ -7166,6 +7306,11 @@ impl VaultContract {
     }
 
     fn accrue_rewards(env: &Env, user: &Address, current_shares: i128) -> Result<(), VaultError> {
+        // Issue #829: reward-excluded addresses do not accrue rewards
+        if balance::get_reward_excluded(env, user) {
+            balance::set_reward_checkpoint_ledger(env, user, env.ledger().sequence());
+            return Ok(());
+        }
         let current_ledger = env.ledger().sequence();
         let is_epoch_mode = env
             .storage()
@@ -7320,14 +7465,56 @@ impl VaultContract {
                 None => return Ok(0),
             };
 
+        // Issue #929: when no rate_override is supplied and no bootstrap
+        // window is active, split [start_ledger, end_ledger) across any
+        // mid-period rate changes recorded in rate_history so each sub-window
+        // settles at the rate that was actually active during those ledgers.
+        if rate_override.is_none() && balance::get_bootstrap_config(env).is_none() {
+            let history = balance::get_rate_history(env);
+            if !history.is_empty() {
+                let mut total_reward: i128 = 0;
+                let mut cursor = start_ledger;
+                while cursor < end_ledger {
+                    let mut active_rate: Option<u32> = None;
+                    let mut next_boundary = end_ledger;
+                    for i in 0..history.len() {
+                        let rc = history.get(i).unwrap();
+                        if rc.changed_at <= cursor {
+                            active_rate = Some(rc.new_rate_bps);
+                        } else {
+                            if active_rate.is_none() {
+                                active_rate = Some(rc.old_rate_bps);
+                            }
+                            if rc.changed_at < next_boundary {
+                                next_boundary = rc.changed_at;
+                            }
+                            break;
+                        }
+                    }
+                    let seg_rate = active_rate.unwrap_or_else(|| balance::get_reward_rate_bps(env));
+                    let seg_reward = Self::reward_between_ledgers_at_rate(
+                        env,
+                        user,
+                        current_shares,
+                        cursor,
+                        next_boundary,
+                        persist,
+                        Some(seg_rate),
+                    )?;
+                    total_reward = total_reward
+                        .checked_add(seg_reward)
+                        .ok_or(VaultError::ArithmeticError)?;
+                    cursor = next_boundary;
+                }
+                return Ok(total_reward);
+            }
+        }
+
         // Issue #202: time-weighted average rate across [start_ledger,
         // end_ledger), correctly handling a bootstrap window that only
         // partially overlaps this range (falls back to the plain
         // reward_rate_bps() when no bootstrap is configured).
-        let base_rate = match rate_override {
-            Some(rate) => rate,
-            None => Self::effective_rate_bps_for_window(env, start_ledger, end_ledger),
-        };
+        let base_rate = Self::effective_rate_bps_for_window(env, user, start_ledger, end_ledger);
         if base_rate == 0 {
             return Ok(0);
         }
@@ -8008,6 +8195,20 @@ impl VaultContract {
     /// emits the `claimed` event. Does NOT call `require_auth` — callers are
     /// responsible for gating access.
     fn do_claim(env: &Env, staker: &Address) -> Result<i128, VaultError> {
+        Self::do_claim_to(env, staker, staker)
+    }
+
+    /// Core claim logic that routes a payout to `destination`.
+    ///
+    /// Native Soroban argument auth is used by `claim_with_signature`; no
+    /// custom ed25519 signature bytes or registered ed25519-key verification
+    /// are needed because Soroban binds this invocation's typed arguments to
+    /// the user's account authorization entry.
+    fn do_claim_to(
+        env: &Env,
+        staker: &Address,
+        destination: &Address,
+    ) -> Result<i128, VaultError> {
         Self::require_not_paused(env, crate::pause_mask::PAUSE_CLAIM)?;
         Self::maybe_emit_position_expired(env, staker);
         let is_epoch_mode = env
@@ -8052,11 +8253,15 @@ impl VaultContract {
             return Err(VaultError::InsufficientRewardPool);
         }
 
+        let token_addr = Self::token_address(env)?;
+        let (reward_after_fee, reward_fee_amount) =
+            crate::reward_fee::apply_reward_fee(env, staker, &token_addr, reward)?;
+
         // Issue #199: retain an insurance-fund cut of the reward before
         // paying the user. Internal accounting only — the insurance portion
         // never leaves the contract's own token balance, it's just
         // reclassified from reward_pool_balance to the insurance fund.
-        let (user_reward, insurance_portion) = Self::split_insurance_portion(env, reward);
+        let (user_reward, insurance_portion) = Self::split_insurance_portion(env, reward_after_fee);
         // Issue #259: an active principal-protection policy charges its
         // premium on every claim, into that same insurance fund.
         let (user_reward, policy_premium) = Self::deduct_insurance_premium(env, staker, user_reward);
@@ -8113,8 +8318,16 @@ impl VaultContract {
             balance::set_claim_history(env, staker, &claim_history);
 
             events::claimed(env, staker, reward, current_ledger);
-            let token_addr = Self::token_address(env)?;
-            crate::claim_receipts::record_receipt(env, staker, reward, &token_addr, staker);
+            crate::claim_receipts::record_receipt(
+                env,
+                staker,
+                reward,
+                &token_addr,
+                staker,
+                reward_fee_amount,
+            );
+            crate::ttl_management::bump(env);
+            crate::user_ttl::bump_entries(env, staker);
             return Ok(0);
         }
 
@@ -8127,8 +8340,6 @@ impl VaultContract {
         if balance::get_escrow_release_ledger(env, staker).is_some() {
             balance::remove_escrow_release_ledger(env, staker);
         }
-
-        let token_addr = Self::token_address(env)?;
 
         let vesting_period: u32 = env
             .storage()
@@ -8157,7 +8368,7 @@ impl VaultContract {
             && !Self::try_auto_convert_reward(env, staker, &token_addr, payout)?
         {
             let token_client = token::Client::new(env, &token_addr);
-            token_client.transfer(&env.current_contract_address(), staker, &payout);
+            token_client.transfer(&env.current_contract_address(), destination, &payout);
         }
 
         balance::set_reward_pool_balance(env, reward_pool - reward + loan_repayment);
@@ -8193,7 +8404,14 @@ impl VaultContract {
         balance::set_claim_history(env, staker, &claim_history);
 
         events::claimed(env, staker, reward, env.ledger().sequence());
-        crate::claim_receipts::record_receipt(env, staker, reward, &token_addr, staker);
+        crate::claim_receipts::record_receipt(
+            env,
+            staker,
+            reward,
+            &token_addr,
+            staker,
+            reward_fee_amount,
+        );
         balance::set_last_updated_ledger(env, env.ledger().sequence()); // Issue #69
 
         // Issue #129: auto-pause if reward balance drops below threshold
@@ -8209,6 +8427,9 @@ impl VaultContract {
 
         // Issue #245: cohort bookkeeping.
         Self::cohort_record_claim(env, staker, reward);
+
+        crate::ttl_management::bump(env);
+        crate::user_ttl::bump_entries(env, staker);
 
         Ok(reward)
     }
@@ -9147,6 +9368,23 @@ impl VaultContract {
             .get(&DataKey::FirstStakedAt(user))
     }
 
+    /// Age of the user's current staking position in ledgers.
+    ///
+    /// Returns `0` before a position has opened or after it has fully exited.
+    /// Partial withdrawals do not reset the age. A redeposit after a full exit
+    /// starts a new current-position age, while `staker_joined_at` remains the
+    /// write-once lifetime first-deposit ledger.
+    pub fn get_position_age(env: Env, user: Address) -> u32 {
+        let first_deposit_ledger: Option<u32> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::StakedAtLedger(user));
+        match first_deposit_ledger {
+            Some(ledger) => env.ledger().sequence().saturating_sub(ledger),
+            None => 0,
+        }
+    }
+
     // ── Issue #98: can_unstake pre-flight check ────────────────────────────────
 
     /// Read-only pre-flight check that simulates whether an unstake of the given
@@ -9461,6 +9699,7 @@ impl VaultContract {
     /// ignored and the original referrer receives the credit). Self-referral is
     /// rejected with `InvalidAddress`. Behaves identically to `stake` in every
     /// other respect.
+    #[cfg(feature = "referrals")]
     pub fn stake_with_referral(
         env: Env,
         staker: Address,
@@ -9519,6 +9758,7 @@ impl VaultContract {
     /// cached. `total_referred_stake` reflects the current live stake of all
     /// users the referrer brought in (decreasing as they unstake). No auth
     /// required.
+    #[cfg(feature = "referrals")]
     pub fn referral_leaderboard(env: Env) -> Vec<ReferralLeaderboardEntry> {
         const CAP: u32 = 10;
         let registry = balance::get_referral_registry(&env);
@@ -9652,6 +9892,62 @@ impl VaultContract {
         }
 
         let reward = Self::do_claim(&env, &user)?;
+        events::claimed_on_behalf(&env, &relayer, &user, reward);
+        Ok(reward)
+    }
+
+    /// Submit a user's signed claim intent as a relayed transaction.
+    ///
+    /// The authorization is native Soroban auth-entry authorization, not a
+    /// custom ed25519 signature. The typed argument vector is:
+    /// `(contract, user, destination, max_amount, nonce, deadline)`.
+    pub fn claim_with_signature(
+        env: Env,
+        relayer: Address,
+        user: Address,
+        destination: Address,
+        max_amount: i128,
+        nonce: u64,
+        deadline: u32,
+    ) -> Result<i128, VaultError> {
+        relayer.require_auth();
+
+        if deadline < env.ledger().sequence() {
+            return Err(VaultError::ClaimDeadlineExpired);
+        }
+        if max_amount <= 0 {
+            return Err(VaultError::ZeroAmount);
+        }
+
+        let nonce_key = (symbol_short!("cl_nonce"), user.clone());
+        let expected_nonce: u64 = env
+            .storage()
+            .persistent()
+            .get(&nonce_key)
+            .unwrap_or(0);
+        if nonce != expected_nonce {
+            return Err(VaultError::NonceMismatch);
+        }
+
+        crate::withdrawal_allowlist::require_destination_allowed(&env, &user, &destination)?;
+
+        let mut args: Vec<Val> = Vec::new(&env);
+        args.push_back(env.current_contract_address().into_val(&env));
+        args.push_back(user.into_val(&env));
+        args.push_back(destination.into_val(&env));
+        args.push_back(max_amount.into_val(&env));
+        args.push_back(nonce.into_val(&env));
+        args.push_back(deadline.into_val(&env));
+        user.require_auth_for_args(&args);
+
+        let reward = Self::do_claim_to(&env, &user, &destination)?;
+        if reward > max_amount {
+            return Err(VaultError::ClaimAmountExceeded);
+        }
+
+        env.storage()
+            .persistent()
+            .set(&nonce_key, &(nonce.checked_add(1).ok_or(VaultError::ArithmeticError)?));
         events::claimed_on_behalf(&env, &relayer, &user, reward);
         Ok(reward)
     }
@@ -9842,7 +10138,10 @@ impl VaultContract {
                 return Err(VaultError::PositionNotFound);
             }
         }
-        if balance::get_open_proposal_count(&env) >= MAX_OPEN_PROPOSALS {
+        crate::proposal_limits::check_proposal_limits(&env, &user);
+        if crate::proposal_limits::max_active_limit(&env) == 0
+            && balance::get_open_proposal_count(&env) >= MAX_OPEN_PROPOSALS
+        {
             return Err(VaultError::MaxPositionsReached);
         }
 
@@ -9874,7 +10173,9 @@ impl VaultContract {
         proposal_cancel::record_proposal_created(&env, id, &user, created_at, bond_paid);
 
         balance::set_proposal(&env, id, &proposal);
+        crate::proposal_limits::record_proposal_active(&env, id, &user);
         // Issue #712: freeze the quorum/threshold that apply to this proposal.
+        #[cfg(feature = "governance")]
         crate::governance_params::snapshot(&env, id);
         // Freeze the governance source (stake / token / both) for this proposal.
         crate::governance_source::snapshot(&env, id);
@@ -10008,6 +10309,14 @@ impl VaultContract {
             if now < executable_at {
                 return Err(VaultError::EpochNotFinalized);
             }
+            if let Some(window) = crate::proposal_window::execution_window_opt(&env) {
+                if now > executable_at.saturating_add(window) {
+                    soroban_sdk::panic_with_error!(
+                        &env,
+                        crate::proposal_window::ProposalWindowError::ProposalExpired
+                    );
+                }
+            }
         }
         // Issue #241: a vetoed proposal can never be enacted, even if it
         // passed the vote threshold.
@@ -10023,6 +10332,7 @@ impl VaultContract {
         proposal.enacted = true;
         // Issue #712: quorum, then threshold, from the params snapshotted at
         // creation (simple majority when none were configured).
+        #[cfg(feature = "governance")]
         if crate::governance_params::passes(
             &env,
             proposal_id,
@@ -10068,6 +10378,7 @@ impl VaultContract {
         if open_count > 0 {
             balance::set_open_proposal_count(&env, open_count - 1);
         }
+        crate::proposal_limits::mark_proposal_terminal(&env, proposal_id);
         events::proposal_enacted(
             &env,
             proposal_id,
@@ -11314,6 +11625,11 @@ impl VaultContract {
         }
 
         balance::set_proposal_vetoer(&env, proposal_id, &user);
+        crate::proposal_limits::mark_proposal_terminal(&env, proposal_id);
+        let open_count = balance::get_open_proposal_count(&env);
+        if open_count > 0 {
+            balance::set_open_proposal_count(&env, open_count - 1);
+        }
         events::proposal_vetoed(&env, &user, proposal_id, stake_bps, env.ledger().sequence());
         Ok(())
     }
@@ -13899,10 +14215,12 @@ impl VaultContract {
                 } else {
                     let reward_pool = balance::get_reward_pool_balance(env);
                     balance::set_reward_pool_balance(env, reward_pool + remaining_fee);
+                    balance::add_treasury_balance(env, &token_addr, remaining_fee);
                 }
             }
         }
         // Issue #453: trigger mirroring for unstake
+        #[cfg(feature = "mirroring")]
         crate::position_mirroring::maybe_mirror_action(
             env,
             staker,
@@ -13954,6 +14272,7 @@ impl VaultContract {
         let user_payout = crate::claim_fee::apply_claim_fee(env, staker, reward_after_bounty)?;
         // Deduct mirror performance fee when the follower has opted in; net
         // payout to the follower is reduced and the fee goes directly to the leader.
+        #[cfg(feature = "mirroring")]
         let user_payout =
             crate::position_mirroring::apply_mirror_perf_fee(env, staker, user_payout)?;
 
@@ -13990,7 +14309,7 @@ impl VaultContract {
         crate::position_value_appreciation_log::maybe_auto_snapshot(env, staker);
 
         events::claimed(env, staker, user_payout, env.ledger().sequence());
-        crate::claim_receipts::record_receipt(env, staker, user_payout, &reward_token_addr, staker);
+        crate::claim_receipts::record_receipt(env, staker, user_payout, &reward_token_addr, staker, 0);
         // Issue #544: single-shot low-balance alert on state-changing calls.
         crate::vault_extensions_542_545::check_and_emit_low_balance(env);
         // Extend the claimer's own position/checkpoint/settings entries so a
@@ -15432,18 +15751,22 @@ pub mod vault_extensions_542_545;
 pub mod vault_extensions_463_466;
 #[path = "position_health_auto_recovery.rs"]
 pub mod position_health_auto_recovery;
+#[cfg(feature = "lockdrop")]
 #[path = "lockdrop_campaign.rs"]
 pub mod lockdrop_campaign;
 #[path = "proof_of_humanity_hook.rs"]
 pub mod proof_of_humanity_hook;
+#[cfg(feature = "governance")]
 #[path = "roadmap_voting.rs"]
 pub mod roadmap_voting;
 #[path = "staker_region_tag.rs"]
 pub mod staker_region_tag;
+#[cfg(any(feature = "referrals", feature = "mirroring"))]
 #[path = "staker_network_graph.rs"]
 pub mod staker_network_graph;
 #[path = "staker_favor_rounding.rs"]
 pub mod staker_favor_rounding;
+#[cfg(feature = "governance")]
 #[path = "daily_community_tip.rs"]
 pub mod daily_community_tip;
 #[path = "time_locked_admin_proposal.rs"]
@@ -15454,6 +15777,7 @@ pub mod meta_staking;
 pub mod batch_vote;
 #[path = "daily_withdrawal_limit.rs"]
 pub mod daily_withdrawal_limit;
+#[cfg(feature = "mirroring")]
 #[path = "position_mirroring.rs"]
 pub mod position_mirroring;
 #[path = "withdraw_only_mode.rs"]
@@ -15490,6 +15814,14 @@ pub mod proposal_cancel;
 pub mod proposal_requirements;
 #[path = "proposal_state.rs"]
 pub mod proposal_state;
+#[path = "proposal_window.rs"]
+pub mod proposal_window;
+#[path = "proposal_limits.rs"]
+pub mod proposal_limits;
+#[path = "node_operator.rs"]
+pub mod node_operator;
+#[path = "operator_slash.rs"]
+pub mod operator_slash;
 #[path = "reward_projection.rs"]
 pub mod reward_projection;
 #[path = "reward_window.rs"]
