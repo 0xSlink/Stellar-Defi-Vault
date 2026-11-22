@@ -96,6 +96,9 @@ mod test_issues_757_760;
 mod test_admin_contract_auth;
 
 #[cfg(test)]
+mod test_passkey_account;
+
+#[cfg(test)]
 mod test_withdrawal_cooldown;
 
 #[cfg(test)]

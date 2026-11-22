@@ -3,6 +3,9 @@
   "private": true,
   "scripts": {
     "watch-events": "tsx scripts/watch-events.ts",
+    "invariant-sweep": "tsx scripts/invariant-sweep.ts",
+    "soak-testnet": "tsx scripts/soak-testnet.ts",
+    "fee-bump-deposit": "tsx scripts/fee-bump-deposit.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
