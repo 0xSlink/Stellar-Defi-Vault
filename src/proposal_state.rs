@@ -150,13 +150,18 @@ pub fn proposal_state(env: &Env, id: u32) -> Option<ProposalState> {
         let delay = guardian_veto::execution_delay_ledgers(env);
         let executable_at = proposal.ends_at.saturating_add(delay);
 
-        return Some(if now < executable_at {
+        if now < executable_at {
             // 5. Waiting out the execution delay.
-            ProposalState::Queued
-        } else {
-            // 6. Ready to enact.
-            ProposalState::Succeeded
-        });
+            return Some(ProposalState::Queued);
+        }
+        if let Some(window) = crate::proposal_window::execution_window_opt(env) {
+            if now > executable_at.saturating_add(window) {
+                // 7b. Execution window elapsed without enactment.
+                return Some(ProposalState::Expired);
+            }
+        }
+        // 6. Ready to enact.
+        Some(ProposalState::Succeeded)
     }
 
     // 8. Voting is still open.

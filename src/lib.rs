@@ -216,3 +216,5 @@ mod test_reward_projection;
 
 #[cfg(test)]
 mod test_reward_window;
+#[cfg(test)]
+mod test_issue_938;

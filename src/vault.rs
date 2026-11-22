@@ -10005,6 +10005,14 @@ impl VaultContract {
             if now < executable_at {
                 return Err(VaultError::EpochNotFinalized);
             }
+            if let Some(window) = crate::proposal_window::execution_window_opt(&env) {
+                if now > executable_at.saturating_add(window) {
+                    soroban_sdk::panic_with_error!(
+                        &env,
+                        crate::proposal_window::ProposalWindowError::ProposalExpired
+                    );
+                }
+            }
         }
         // Issue #241: a vetoed proposal can never be enacted, even if it
         // passed the vote threshold.
@@ -15487,6 +15495,8 @@ pub mod proposal_cancel;
 pub mod proposal_requirements;
 #[path = "proposal_state.rs"]
 pub mod proposal_state;
+#[path = "proposal_window.rs"]
+pub mod proposal_window;
 #[path = "reward_projection.rs"]
 pub mod reward_projection;
 #[path = "reward_window.rs"]
