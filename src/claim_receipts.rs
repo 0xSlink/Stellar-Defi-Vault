@@ -13,7 +13,7 @@
 //! existing convention (e.g. `events::claimed`) of keying events by the
 //! subject address in the topics.
 //! Data: `(claim_id: u32, amount: i128, reward_token: Address, ledger: u32,
-//! destination: Address)`.
+//! destination: Address, fee_amount: i128)`.
 //!
 //! # Storage
 //! `DataKey` sits at Soroban's 50-variant cap, so the per-user counter uses
@@ -33,22 +33,25 @@ fn get_count(env: &Env, user: &Address) -> u32 {
 }
 
 fn set_count(env: &Env, user: &Address, count: u32) {
-    env.storage()
-        .persistent()
-        .set(&(CLAIM_COUNT_KEY, user.clone()), &count);
+    let key = (CLAIM_COUNT_KEY, user.clone());
+    env.storage().persistent().set(&key, &count);
+    let thr = crate::user_ttl::threshold(env);
+    let tgt = crate::user_ttl::target(env).min(env.storage().max_ttl());
+    env.storage().persistent().extend_ttl(&key, thr, tgt);
 }
 
 /// Allocates the next monotonic `claim_id` for `user` (1-based: the first
 /// receipt is id `1`), emits the `claim_receipt` event, and persists the
 /// new count. Call exactly once per *paid* claim — after the final payout
-/// `amount`, `reward_token`, and `destination` are known — from each
-/// full/partial claim entrypoint. Returns the assigned `claim_id`.
+/// `amount`, `reward_token`, `destination`, and `fee_amount` are known — from
+/// each full/partial claim or compound entrypoint. Returns the assigned `claim_id`.
 pub fn record_receipt(
     env: &Env,
     user: &Address,
     amount: i128,
     reward_token: &Address,
     destination: &Address,
+    fee_amount: i128,
 ) -> u32 {
     let claim_id = get_count(env, user).saturating_add(1);
     set_count(env, user, claim_id);
@@ -61,6 +64,7 @@ pub fn record_receipt(
             reward_token.clone(),
             env.ledger().sequence(),
             destination.clone(),
+            fee_amount,
         ),
     );
 

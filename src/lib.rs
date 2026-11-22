@@ -27,6 +27,7 @@ pub mod example_consumer;
 pub mod interface;
 pub mod nft;
 pub mod reward_accumulator;
+pub mod reward_fee;
 mod reward_math;
 mod storage;
 pub mod ttl_management;
@@ -234,10 +235,13 @@ mod test_reward_projection;
 mod test_reward_window;
 
 #[cfg(test)]
-mod test_issue_941_contractmeta_security;
+mod test_reward_fee;
 
 #[cfg(test)]
-mod test_issue_945_multi_token_treasury;
+mod test_ttl_coverage;
 
 #[cfg(test)]
-mod test_issue_946_key_management_docs;
+mod test_mid_period_rate_changes;
+
+#[cfg(test)]
+mod test_zero_elapsed_ledger;
