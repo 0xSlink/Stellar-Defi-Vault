@@ -222,3 +222,5 @@ mod test_issue_938;
 mod test_issue_937;
 #[cfg(test)]
 mod test_issue_932;
+#[cfg(test)]
+mod test_issue_933;

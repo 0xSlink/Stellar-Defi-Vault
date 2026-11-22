@@ -15511,6 +15511,8 @@ pub mod proposal_window;
 pub mod proposal_limits;
 #[path = "node_operator.rs"]
 pub mod node_operator;
+#[path = "operator_slash.rs"]
+pub mod operator_slash;
 #[path = "reward_projection.rs"]
 pub mod reward_projection;
 #[path = "reward_window.rs"]
