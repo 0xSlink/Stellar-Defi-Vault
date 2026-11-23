@@ -173,16 +173,6 @@ pub(crate) const QUIZ_HASH_LEN: u32 = 32;
 pub(crate) const MERKLE_ROOT_HASH_LEN: u32 = 32;
 /// Exact SHA-256 digest size for revenue-share Merkle roots.
 pub(crate) const REVENUE_MERKLE_ROOT_HASH_LEN: u32 = 32;
-/// Max waitlist size cap (Acceptance Criteria #7)
-pub(crate) const MAX_WAITLIST_SIZE: u32 = 100;
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct WaitlistEntry {
-    pub user: Address,
-    pub intended_amount: i128,
-    pub joined_waitlist_at: u32,
-}
 
 #[contract]
 pub struct VaultContract;
@@ -3017,50 +3007,6 @@ impl VaultContract {
     /// through quiz completion. Returns `0` if no quiz has been completed (issue #391).
     pub fn get_unlocked_tier(env: Env, user: Address) -> u32 {
         balance::get_user_quiz_tier(&env, &user)
-    }
-
-    /// Adds user to waitlist FIFO queue when pool is at cap.
-    pub fn join_waitlist(env: Env, user: Address, intended_amount: i128) -> Result<(), VaultError> {
-        user.require_auth();
-        let current_staked: i128 = env
-            .storage()
-            .instance()
-            .get(&symbol_short!("cur_stk"))
-            .unwrap_or(balance::get_total_deposited(&env));
-        let max_capacity: i128 = env
-            .storage()
-            .instance()
-            .get(&symbol_short!("max_cap"))
-            .unwrap_or(0);
-        if max_capacity > 0 && current_staked < max_capacity {
-            return Err(VaultError::InvalidRate);
-        }
-        let mut queue: Vec<WaitlistEntry> = Self::get_waitlist(env.clone());
-        if queue.len() >= MAX_WAITLIST_SIZE {
-            return Err(VaultError::InvalidRate);
-        }
-        let entry = WaitlistEntry {
-            user: user.clone(),
-            intended_amount,
-            joined_waitlist_at: env.ledger().sequence(),
-        };
-        queue.push_back(entry);
-        env.storage()
-            .instance()
-            .set(&symbol_short!("waitlist"), &queue);
-        env.events().publish(
-            (symbol_short!("wl_join"), user),
-            (intended_amount, env.ledger().sequence()),
-        );
-        Ok(())
-    }
-
-    /// Read-only query for the current waitlist FIFO queue.
-    pub fn get_waitlist(env: Env) -> Vec<WaitlistEntry> {
-        env.storage()
-            .instance()
-            .get(&symbol_short!("waitlist"))
-            .unwrap_or(Vec::new(&env))
     }
 
     // ── Issue #467: Reward Token Audit Trail ─────────────────────────────────
@@ -15826,3 +15772,11 @@ pub mod operator_slash;
 pub mod reward_projection;
 #[path = "reward_window.rs"]
 pub mod reward_window;
+#[path = "deposit_throughput.rs"]
+pub mod deposit_throughput;
+#[path = "share_price_bound.rs"]
+pub mod share_price_bound;
+#[path = "health_guard.rs"]
+pub mod health_guard;
+#[path = "deposit_waitlist.rs"]
+pub mod deposit_waitlist;
