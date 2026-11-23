@@ -185,3 +185,12 @@ mod test_runbook_interface_snapshot;
 
 #[cfg(test)]
 mod test_feature_gating_matrix;
+
+#[cfg(test)]
+mod test_depositor_index;
+
+#[cfg(test)]
+mod test_allowlist_merkle;
+
+#[cfg(test)]
+mod test_merkle_distributor;

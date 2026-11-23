@@ -15826,3 +15826,9 @@ pub mod operator_slash;
 pub mod reward_projection;
 #[path = "reward_window.rs"]
 pub mod reward_window;
+#[path = "depositor_index.rs"]
+pub mod depositor_index;
+#[path = "allowlist_merkle.rs"]
+pub mod allowlist_merkle;
+#[path = "merkle_distributor.rs"]
+pub mod merkle_distributor;
