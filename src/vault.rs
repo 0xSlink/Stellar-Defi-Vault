@@ -140,16 +140,6 @@ pub(crate) const QUIZ_HASH_LEN: u32 = 32;
 pub(crate) const MERKLE_ROOT_HASH_LEN: u32 = 32;
 /// Exact SHA-256 digest size for revenue-share Merkle roots.
 pub(crate) const REVENUE_MERKLE_ROOT_HASH_LEN: u32 = 32;
-/// Max waitlist size cap (Acceptance Criteria #7)
-pub(crate) const MAX_WAITLIST_SIZE: u32 = 100;
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct WaitlistEntry {
-    pub user: Address,
-    pub intended_amount: i128,
-    pub joined_waitlist_at: u32,
-}
 
 #[contract]
 pub struct VaultContract;
@@ -2900,50 +2890,6 @@ impl VaultContract {
     /// through quiz completion. Returns `0` if no quiz has been completed (issue #391).
     pub fn get_unlocked_tier(env: Env, user: Address) -> u32 {
         balance::get_user_quiz_tier(&env, &user)
-    }
-
-    /// Adds user to waitlist FIFO queue when pool is at cap.
-    pub fn join_waitlist(env: Env, user: Address, intended_amount: i128) -> Result<(), VaultError> {
-        user.require_auth();
-        let current_staked: i128 = env
-            .storage()
-            .instance()
-            .get(&symbol_short!("cur_stk"))
-            .unwrap_or(balance::get_total_deposited(&env));
-        let max_capacity: i128 = env
-            .storage()
-            .instance()
-            .get(&symbol_short!("max_cap"))
-            .unwrap_or(0);
-        if max_capacity > 0 && current_staked < max_capacity {
-            return Err(VaultError::InvalidRate);
-        }
-        let mut queue: Vec<WaitlistEntry> = Self::get_waitlist(env.clone());
-        if queue.len() >= MAX_WAITLIST_SIZE {
-            return Err(VaultError::InvalidRate);
-        }
-        let entry = WaitlistEntry {
-            user: user.clone(),
-            intended_amount,
-            joined_waitlist_at: env.ledger().sequence(),
-        };
-        queue.push_back(entry);
-        env.storage()
-            .instance()
-            .set(&symbol_short!("waitlist"), &queue);
-        env.events().publish(
-            (symbol_short!("wl_join"), user),
-            (intended_amount, env.ledger().sequence()),
-        );
-        Ok(())
-    }
-
-    /// Read-only query for the current waitlist FIFO queue.
-    pub fn get_waitlist(env: Env) -> Vec<WaitlistEntry> {
-        env.storage()
-            .instance()
-            .get(&symbol_short!("waitlist"))
-            .unwrap_or(Vec::new(&env))
     }
 
     // ── Issue #467: Reward Token Audit Trail ─────────────────────────────────
@@ -15600,194 +15546,137 @@ impl VaultContract {
         Ok(())
     }
 
-    /// Claim all matured vesting entries for `user` in a single token transfer.
-    ///
-    /// Iterates every vesting entry for the user, collects all entries whose
-    /// `vested_at_ledger <= current_ledger`, transfers the sum total from the
-    /// reward pool in one call, and removes only the matured entries. Immature
-    /// entries are left untouched.
-    ///
-    /// Returns the total amount transferred. Returns `0` when no entries have
-    /// matured yet — does not revert. Requires user auth.
-    pub fn withdraw_all_vested(env: Env, user: Address) -> Result<i128, VaultError> {
-        user.require_auth();
+// ── Extension modules with `#[contractimpl]` blocks ─────────────────────────
+//
+// soroban-sdk's macros generate the contract client (with private mock-auth
+// fields) and the testutils function-set registry inside THIS module. A
+// `#[contractimpl]` block anywhere else would reference those private items
+// from outside the module tree and fail to compile under
+// `cargo test --features testutils`. Rust privacy lets descendant modules
+// touch them, so every extension module that adds entrypoints to
+// `VaultContract` is declared here as a child. `lib.rs` re-exports them with
+// `pub use vault::...` so existing `crate::module` paths keep working.
 
-        let current_ledger = env.ledger().sequence();
-        let entries = balance::get_vesting_entries(&env, &user);
-
-        let mut total: i128 = 0;
-        let mut remaining: Vec<VestingEntry> = Vec::new(&env);
-        let mut i = 0u32;
-        while i < entries.len() {
-            let entry = entries.get(i).unwrap();
-            if entry.vested_at_ledger <= current_ledger {
-                total = total
-                    .checked_add(entry.amount)
-                    .ok_or(VaultError::ArithmeticError)?;
-            } else {
-                remaining.push_back(entry);
-            }
-            i += 1;
-        }
-
-        if total == 0 {
-            return Ok(0);
-        }
-
-        let reward_pool = balance::get_reward_pool_balance(&env);
-        if reward_pool < total {
-            return Err(VaultError::InsufficientRewardPool);
-        }
-
-        balance::set_reward_pool_balance(&env, reward_pool - total);
-        balance::set_vesting_entries(&env, &user, &remaining);
-
-        let token_addr: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Token)
-            .ok_or(VaultError::NotInitialized)?;
-        let token_client = token::Client::new(&env, &token_addr);
-        token_client.transfer(&env.current_contract_address(), &user, &total);
-
-        Ok(total)
-    }
-
-    // ── Issue #939: on-chain upgrade history ─────────────────────────────────────
-
-    /// Record an on-chain upgrade (issue #939).
-    ///
-    /// Records the wasm hash, ledger, and storage version of a contract upgrade
-    /// so frontends and integrators can verify which contract code is active.
-    pub fn record_upgrade(env: Env, wasm_hash: soroban_sdk::Bytes, storage_version: u32) {
-        let current_ledger = env.ledger().sequence();
-        UpgradeHandler::record(&env, wasm_hash, storage_version, current_ledger);
-    }
-
-    /// Get the upgrade history record at the given index (issue #939).
-    ///
-    /// Returns `None` when the index is out of bounds.
-    pub fn get_upgrade_record(env: Env, index: u32) -> Option<storage::UpgradeRecord> {
-        UpgradeHandler::get_record(&env, index)
-    }
-
-    // ── Issue #940: successor pointer for deprecated pools ────────────────────────
-
-    /// Set the successor pool address (issue #940).
-    ///
-    /// When a pool is deprecated or migrated, the admin can set a successor pool
-    /// address so frontends and integrators can redirect users. This is a
-    /// one-way operation.
-    pub fn set_successor_pool(env: Env, successor: Address) {
-        balance::set_successor_pool(&env, &successor);
-    }
-
-    /// Get the successor pool address (issue #940).
-    ///
-    /// Returns `None` if no successor has been set.
-    pub fn get_successor_pool(env: Env) -> Option<Address> {
-        balance::get_successor_pool(&env)
-    }
-
-    // ── Issue #942: share token name and symbol metadata for wallets ─────────────
-
-    /// Set the stake token name (issue #942).
-    ///
-    /// The name is derived from the underlying asset at initialization, with
-    /// admin override within length limits. Wallets use this to display a
-    /// sensible token name.
-    pub fn set_stake_token_name(env: Env, name: soroban_sdk::String) {
-        balance::set_stake_token_name(&env, &name);
-    }
-
-    /// Get the stake token name (issue #942).
-    ///
-    /// Returns `None` if no name has been set.
-    pub fn get_stake_token_name(env: Env) -> Option<soroban_sdk::String> {
-        balance::get_stake_token_name(&env)
-    }
-
-    /// Set the stake token symbol (issue #942).
-    ///
-    /// The symbol is derived from the underlying asset at initialization, with
-    /// admin override within length limits. Wallets use this to display a
-    /// sensible token symbol.
-    pub fn set_stake_token_symbol(env: Env, symbol: soroban_sdk::String) {
-        balance::set_stake_token_symbol(&env, &symbol);
-    }
-
-    /// Get the stake token symbol (issue #942).
-    ///
-    /// Returns `None` if no symbol has been set.
-    pub fn get_stake_token_symbol(env: Env) -> Option<soroban_sdk::String> {
-        balance::get_stake_token_symbol(&env)
-    }
-
-    /// Set the stake token decimals (issue #942).
-    ///
-    /// Defaults to 7 (Stellar standard) when not explicitly set.
-    pub fn set_stake_token_decimals(env: Env, decimals: u32) {
-        balance::set_stake_token_decimals(&env, decimals);
-    }
-
-    /// Get the stake token decimals (issue #942).
-    ///
-    /// Returns the configured decimal precision, defaulting to 7 (Stellar
-    /// standard) when not explicitly set.
-    pub fn get_stake_token_decimals(env: Env) -> u32 {
-        balance::get_stake_token_decimals(&env)
-    }
-
-    // ── Issue #943: track lifetime and all-time-high pool statistics ─────────────
-
-    /// Update peak TVL (issue #943).
-    ///
-    /// If the given amount exceeds the current peak TVL, the peak is updated.
-    /// This is called after deposit or withdrawal operations.
-    pub fn update_peak_tvl(env: Env, amount: i128) {
-        let current_peak = balance::get_peak_tvl(&env);
-        if amount > current_peak {
-            balance::set_peak_tvl(&env, amount);
-        }
-    }
-
-    /// Add to lifetime deposited volume (issue #943).
-    ///
-    /// Increments the total volume ever deposited across all time. This is
-    /// incremented on each deposit and is never decremented.
-    pub fn add_lifetime_deposited(env: Env, amount: i128) {
-        let current = balance::get_lifetime_deposited_volume(&env);
-        balance::set_lifetime_deposited_volume(&env, current + amount);
-    }
-
-    /// Add to lifetime withdrawn volume (issue #943).
-    ///
-    /// Increments the total volume ever withdrawn across all time. This is
-    /// incremented on each withdrawal and is never decremented.
-    pub fn add_lifetime_withdrawn(env: Env, amount: i128) {
-        let current = balance::get_lifetime_withdrawn_volume(&env);
-        balance::set_lifetime_withdrawn_volume(&env, current + amount);
-    }
-
-    /// Increment unique depositors count (issue #943).
-    ///
-    /// Increments the count of unique addresses that have ever deposited.
-    /// Note: this does not perform client-side deduplication; the count should
-    /// be tracked off-chain for accurate unique counts.
-    pub fn increment_unique_depositors(env: Env) {
-        balance::increment_unique_depositors(&env);
-    }
-
-    // ── Issue #117: pool_uptime_ledgers ───────────────────────────────────────
-
-    /// Read-only query for how many ledgers the pool has been active.
-    ///
-    /// Returns `current_ledger - initialized_at_ledger`. Approximate days:
-    /// `uptime_ledgers / 17280` (assuming ~5 s per ledger). Reverts with
-    /// `NotInitialized` if `initialize` has not been called. No auth required.
-    pub fn pool_uptime_ledgers(env: Env) -> Result<u32, VaultError> {
-        let initialized_at =
-            balance::get_initialized_at_ledger(&env).ok_or(VaultError::NotInitialized)?;
-        Ok(env.ledger().sequence().saturating_sub(initialized_at))
-    }
-}
+#[path = "activity_log.rs"]
+pub mod activity_log;
+#[path = "invariants.rs"]
+pub mod invariants;
+#[path = "pause_grace_period.rs"]
+pub mod pause_grace_period;
+#[path = "reward_rate_ceiling.rs"]
+pub mod reward_rate_ceiling;
+#[path = "runway_guard.rs"]
+pub mod runway_guard;
+#[path = "pool_insights.rs"]
+pub mod pool_insights;
+#[path = "admin_recovery.rs"]
+pub mod admin_recovery;
+#[path = "access_roles.rs"]
+pub mod access_roles;
+#[path = "dynamic_reward_rate.rs"]
+pub mod dynamic_reward_rate;
+#[path = "keeper_registry.rs"]
+pub mod keeper_registry;
+#[path = "scheduled_exit.rs"]
+pub mod scheduled_exit;
+#[path = "snapshot_airdrop.rs"]
+pub mod snapshot_airdrop;
+#[path = "external_price_oracle.rs"]
+pub mod external_price_oracle;
+#[path = "co_sponsor.rs"]
+pub mod co_sponsor;
+#[path = "vault_extensions_498_501.rs"]
+pub mod vault_extensions_498_501;
+#[path = "vault_extensions_502_505.rs"]
+pub mod vault_extensions_502_505;
+#[path = "vault_extensions_538_541.rs"]
+pub mod vault_extensions_538_541;
+#[path = "vault_extensions_542_545.rs"]
+pub mod vault_extensions_542_545;
+#[path = "vault_extensions_463_466.rs"]
+pub mod vault_extensions_463_466;
+#[path = "position_health_auto_recovery.rs"]
+pub mod position_health_auto_recovery;
+#[cfg(feature = "lockdrop")]
+#[path = "lockdrop_campaign.rs"]
+pub mod lockdrop_campaign;
+#[path = "proof_of_humanity_hook.rs"]
+pub mod proof_of_humanity_hook;
+#[cfg(feature = "governance")]
+#[path = "roadmap_voting.rs"]
+pub mod roadmap_voting;
+#[path = "staker_region_tag.rs"]
+pub mod staker_region_tag;
+#[cfg(any(feature = "referrals", feature = "mirroring"))]
+#[path = "staker_network_graph.rs"]
+pub mod staker_network_graph;
+#[path = "staker_favor_rounding.rs"]
+pub mod staker_favor_rounding;
+#[cfg(feature = "governance")]
+#[path = "daily_community_tip.rs"]
+pub mod daily_community_tip;
+#[path = "time_locked_admin_proposal.rs"]
+pub mod time_locked_admin_proposal;
+#[path = "meta_staking.rs"]
+pub mod meta_staking;
+#[path = "batch_vote.rs"]
+pub mod batch_vote;
+#[path = "daily_withdrawal_limit.rs"]
+pub mod daily_withdrawal_limit;
+#[cfg(feature = "mirroring")]
+#[path = "position_mirroring.rs"]
+pub mod position_mirroring;
+#[path = "withdraw_only_mode.rs"]
+pub mod withdraw_only_mode;
+#[path = "position_split_merge.rs"]
+pub mod position_split_merge;
+#[path = "beneficiary_inheritance.rs"]
+pub mod beneficiary_inheritance;
+#[path = "dust_cleanup.rs"]
+pub mod dust_cleanup;
+#[path = "fee_change_notice.rs"]
+pub mod fee_change_notice;
+#[path = "sub_pool_delegation.rs"]
+pub mod sub_pool_delegation;
+#[path = "sub_pool_rebalancing.rs"]
+pub mod sub_pool_rebalancing;
+#[path = "quadratic_vote.rs"]
+pub mod quadratic_vote;
+#[path = "benchmark_rate.rs"]
+pub mod benchmark_rate;
+#[path = "auto_claim_on_withdraw.rs"]
+pub mod auto_claim_on_withdraw;
+#[path = "pause_mask.rs"]
+pub mod pause_mask;
+#[path = "guardian_pause.rs"]
+pub mod guardian_pause;
+#[path = "guardian_veto.rs"]
+pub mod guardian_veto;
+#[path = "vote_change.rs"]
+pub mod vote_change;
+#[path = "proposal_cancel.rs"]
+pub mod proposal_cancel;
+#[path = "proposal_requirements.rs"]
+pub mod proposal_requirements;
+#[path = "proposal_state.rs"]
+pub mod proposal_state;
+#[path = "proposal_window.rs"]
+pub mod proposal_window;
+#[path = "proposal_limits.rs"]
+pub mod proposal_limits;
+#[path = "node_operator.rs"]
+pub mod node_operator;
+#[path = "operator_slash.rs"]
+pub mod operator_slash;
+#[path = "reward_projection.rs"]
+pub mod reward_projection;
+#[path = "reward_window.rs"]
+pub mod reward_window;
+#[path = "deposit_throughput.rs"]
+pub mod deposit_throughput;
+#[path = "share_price_bound.rs"]
+pub mod share_price_bound;
+#[path = "health_guard.rs"]
+pub mod health_guard;
+#[path = "deposit_waitlist.rs"]
+pub mod deposit_waitlist;
