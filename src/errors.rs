@@ -1345,36 +1345,28 @@ pub enum VaultSafetyError {
     /// Returned by `close_dust_position()` while the position has escrowed
     /// rewards pending release, which closing would forfeit (issue #708).
     EscrowPending = 18,
-    /// Returned by the deposit gate when an allowlist root is configured but
-    /// the deposit was not accompanied by a valid Merkle proof (issue #872).
-    AllowlistProofRequired = 19,
-    /// Returned when a Merkle proof does not resolve to the stored root
-    /// (issues #872 and #873).
-    InvalidMerkleProof = 20,
-    /// Returned when a supplied Merkle proof exceeds the maximum supported
-    /// length (issues #872 and #873).
-    MerkleProofTooLong = 21,
-    /// Returned by `claim_distribution()` for an unknown distribution id
-    /// (issue #873).
-    DistributionNotFound = 22,
-    /// Returned by `claim_distribution()` after the distribution's expiry
-    /// ledger has passed (issue #873).
-    DistributionExpired = 23,
-    /// Returned by `recover_unclaimed()` before the distribution's expiry
-    /// ledger has passed (issue #873).
-    DistributionNotExpired = 24,
-    /// Returned by `claim_distribution()` when the leaf has already been
-    /// claimed (issue #873).
-    DistributionAlreadyClaimed = 25,
-    /// Returned by `recover_unclaimed()` when the remainder was already
-    /// recovered (issue #873).
-    DistributionAlreadyRecovered = 26,
-    /// Returned by `publish_distribution()` for a non-positive total or an
-    /// already-elapsed expiry (issue #873).
-    InvalidDistribution = 27,
-    /// Returned by `claim_distribution()` when paying the leaf would exceed the
-    /// distribution's escrowed total (issue #873).
-    InsufficientDistributionBalance = 28,
+    /// Returned by `set_management_fee_bps()` above the hard annual ceiling
+    /// (issue #868).
+    InvalidManagementFeeBps = 19,
+    /// Returned by `configure_series()` / `rollover_series()` when the window
+    /// is empty or maturity is not strictly after the deposit close
+    /// (issue #869).
+    InvalidSeriesConfig = 20,
+    /// Returned by the deposit gate when a fixed-term series has closed to new
+    /// deposits (issue #869).
+    SeriesDepositClosed = 21,
+    /// Returned by the withdrawal gate before a fixed-term series has matured
+    /// (issue #869).
+    SeriesNotMatured = 22,
+    /// Returned by `set_deposit_window()` when the open portion is zero or
+    /// longer than the period (issue #870).
+    InvalidDepositWindow = 23,
+    /// Returned by the deposit gate outside a scheduled deposit window
+    /// (issue #870).
+    DepositWindowClosed = 24,
+    /// Returned by `set_early_bird()` for a zero/oversized configuration
+    /// (issue #871).
+    InvalidEarlyBirdConfig = 25,
 }
 
 impl From<VaultError> for VaultSafetyError {

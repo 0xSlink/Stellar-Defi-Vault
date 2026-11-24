@@ -422,6 +422,9 @@ impl VaultContract {
         )
         .ok_or(VaultError::ArithmeticError)?;
 
+        // Issue #871: the first N unique depositors mint boosted shares while
+        // their launch bonus is live.
+        let shares_minted = crate::early_bird::record_and_bonus(&env, &user, shares_minted);
         let current_shares = balance::get_shares(&env, &user);
         balance::set_shares(&env, &user, current_shares.checked_add(shares_minted).ok_or(VaultError::ArithmeticError)?);
         balance::set_total_shares(&env, total_shares.checked_add(shares_minted).ok_or(VaultError::ArithmeticError)?);
@@ -574,6 +577,9 @@ impl VaultContract {
             balance::get_stake_decimals(&env),
         )
         .ok_or(VaultError::ArithmeticError)?;
+
+        // Issue #871: the launch bonus is credited to the receiving position.
+        let shares_minted = crate::early_bird::record_and_bonus(&env, &receiver, shares_minted);
 
         let current_shares = balance::get_shares(&env, &receiver);
         balance::set_shares(
@@ -3499,6 +3505,14 @@ impl VaultContract {
         if balance::get_sunset_exit_deadline(env).is_some() || withdraw_only_mode::is_active(env) {
             return Err(VaultError::PoolShuttingDown);
         }
+        // Issue #868: bank the management fee before any share pricing, so the
+        // new depositor buys in at a price that already includes it.
+        crate::management_fee::accrue_and_mint(env);
+        // Issue #869: a closing or matured fixed-term series stops accepting
+        // deposits.
+        crate::vault_series::require_deposit_allowed(env);
+        // Issue #870: honour the configured scheduled deposit windows.
+        crate::deposit_windows::require_open(env);
         Ok(())
     }
 
@@ -3571,6 +3585,9 @@ impl VaultContract {
             return Err(VaultError::InvalidRate);
         }
 
+        // Issue #871: the launch bonus is minted on top of the base shares.
+        let shares = crate::early_bird::record_and_bonus(env, user, shares);
+
         let cur = balance::get_shares(env, user);
         balance::set_shares(env, user, cur + shares);
         balance::set_total_shares(env, total_shares + shares);
@@ -3598,6 +3615,10 @@ impl VaultContract {
         if shares <= 0 {
             return Err(VaultError::ZeroAmount);
         }
+        // Issue #868: bank the management fee before pricing the exit.
+        crate::management_fee::accrue_and_mint(env);
+        // Issue #869: a fixed-term series blocks exits until it matures.
+        crate::vault_series::require_withdraw_allowed(env);
         Self::require_not_paused(env, crate::pause_mask::PAUSE_WITHDRAW)?;
         if Self::get_lock_status(env.clone(), staker.clone()).is_some() {
             return Err(VaultError::UseCooldownFlow);
@@ -4614,6 +4635,9 @@ impl VaultContract {
         let shares = balance::amount_to_shares(total_shares, total_deposited, amount)
             .ok_or(VaultExtError::ArithmeticError)?;
 
+        // Issue #871: the launch bonus is minted on top of the base shares.
+        let shares = crate::early_bird::record_and_bonus(env, staker, shares);
+
         balance::set_shares(env, staker, current_shares + shares);
         balance::set_total_shares(env, total_shares + shares);
         balance::set_total_deposited(env, total_deposited + amount);
@@ -5376,6 +5400,9 @@ impl VaultContract {
 
         let shares = balance::amount_to_shares(total_shares, total_deposited, amount)
             .ok_or(VaultError::ArithmeticError)?;
+
+        // Issue #871: the launch bonus is credited to the beneficiary position.
+        let shares = crate::early_bird::record_and_bonus(&env, &beneficiary, shares);
 
         let token_client = token::Client::new(&env, &token_addr);
         token_client.transfer(&delegate, &env.current_contract_address(), &amount);
@@ -6589,6 +6616,9 @@ impl VaultContract {
             balance::amount_to_shares(adjusted_total_shares, adjusted_total_deposited, amount)
                 .ok_or(VaultError::ArithmeticError)?;
 
+        // Issue #871: the launch bonus is minted on top of the base shares.
+        let shares = crate::early_bird::record_and_bonus(env, staker, shares);
+
         let token_client = token::Client::new(env, &token_addr);
         token_client.transfer(staker, &env.current_contract_address(), &amount);
 
@@ -6713,6 +6743,11 @@ impl VaultContract {
         shares: i128,
         recipient: &Address,
     ) -> Result<i128, VaultError> {
+        // Issue #868: bank the management fee before pricing the exit so the
+        // leaving staker is diluted by exactly the fee owed.
+        crate::management_fee::accrue_and_mint(env);
+        // Issue #869: a fixed-term series blocks exits until it matures.
+        crate::vault_series::require_withdraw_allowed(env);
         // Principal stays recoverable, but only to the owner's own address.
         crate::address_blocklist::require_withdrawal_allowed(env, staker, recipient)?;
         crate::withdrawal_allowlist::require_destination_allowed(env, staker, recipient)?;
@@ -7886,9 +7921,15 @@ impl VaultContract {
         match balance::get_sunset_state(env) {
             SunsetState::GracePeriodActive
             | SunsetState::ForceResolutionActive
-            | SunsetState::Closed => Err(VaultError::PoolShuttingDown),
-            SunsetState::Active | SunsetState::SunsetAnnounced => Ok(()),
+            | SunsetState::Closed => return Err(VaultError::PoolShuttingDown),
+            SunsetState::Active | SunsetState::SunsetAnnounced => {}
         }
+        // Issue #868/#869/#870: the same inflow gates `require_no_sunset`
+        // applies, so this parallel deposit path can't slip past them.
+        crate::management_fee::accrue_and_mint(env);
+        crate::vault_series::require_deposit_allowed(env);
+        crate::deposit_windows::require_open(env);
+        Ok(())
     }
 
     /// Issue #129: check if reward balance dropped below threshold and auto-pause if needed.
@@ -8333,6 +8374,9 @@ impl VaultContract {
 
         let shares = balance::amount_to_shares(total_shares, total_deposited, amount)
             .ok_or(VaultError::ArithmeticError)?;
+
+        // Issue #871: the launch bonus is minted on top of the base shares.
+        let shares = crate::early_bird::record_and_bonus(env, staker, shares);
 
         let token_client = token::Client::new(env, &token_addr);
         token_client.transfer(staker, &env.current_contract_address(), &amount);
@@ -13196,6 +13240,9 @@ impl VaultContract {
             balance::amount_to_shares(total_shares, total_deposited, amount)
                 .ok_or(VaultError::ArithmeticError)?;
 
+        // Issue #871: the launch bonus is credited to the recipient position.
+        let shares = crate::early_bird::record_and_bonus(&env, &recipient, shares);
+
         balance::set_shares(&env, &recipient, shares);
         balance::set_staked_at_ledger(&env, &recipient, env.ledger().sequence());
         balance::set_last_claim_ledger(&env, &recipient, env.ledger().sequence());
@@ -15384,6 +15431,9 @@ pub fn get_reward_threshold(env: Env) -> i128 {
             let shares = balance::amount_to_shares(total_shares, total_deposited, amount)
                 .ok_or(VaultError::ArithmeticError)?;
 
+            // Issue #871: the launch bonus applies per beneficiary.
+            let shares = crate::early_bird::record_and_bonus(&env, &beneficiary, shares);
+
             let existing = balance::get_shares(&env, &beneficiary);
             balance::set_shares(&env, &beneficiary, existing + shares);
             new_total_shares += shares;
@@ -15672,9 +15722,11 @@ pub mod operator_slash;
 pub mod reward_projection;
 #[path = "reward_window.rs"]
 pub mod reward_window;
-#[path = "depositor_index.rs"]
-pub mod depositor_index;
-#[path = "allowlist_merkle.rs"]
-pub mod allowlist_merkle;
-#[path = "merkle_distributor.rs"]
-pub mod merkle_distributor;
+#[path = "management_fee.rs"]
+pub mod management_fee;
+#[path = "vault_series.rs"]
+pub mod vault_series;
+#[path = "deposit_windows.rs"]
+pub mod deposit_windows;
+#[path = "early_bird.rs"]
+pub mod early_bird;
