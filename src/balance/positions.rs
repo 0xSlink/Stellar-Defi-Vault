@@ -22,12 +22,16 @@ pub fn get_shares(env: &Env, user: &Address) -> i128 {
 
 pub fn set_shares(env: &Env, user: &Address, amount: i128) {
     assert_non_negative(env, amount);
+    // Issue #748: keep the depositor index in step with the zero/non-zero
+    // share boundary. Capture the prior balance before it is overwritten.
+    let old = get_shares(env, user);
     // Issue #699: extra reward tokens accrue per share, so settle them at the
     // old share count before it changes.
     crate::vault::multi_reward_tokens::settle_user(env, user);
     env.storage()
         .persistent()
         .set(&DataKey::ShareBalance(user.clone()), &amount);
+    crate::vault::depositor_index::track(env, user, old, amount);
 }
 
 pub fn get_total_shares(env: &Env) -> i128 {

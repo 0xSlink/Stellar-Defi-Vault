@@ -2,14 +2,25 @@
 /**
  * Post-deployment verification script.
  *
- * Verifies that on-chain state matches the intended configuration
- * and that the deployed Wasm hash matches the release build.
+ * Verifies that on-chain state matches the intended configuration by querying
+ * the deployed contract through `scripts/vaultctl.ts` — the shared operator
+ * CLI (issue #859) — so this script never draws the vault state itself.
  *
  * Usage:
  *   npx tsx scripts/verify-deployment.ts --config config/testnet.toml --contract-id <id>
+ *
+ * Target/network are taken from flags or the same environment variables the
+ * rest of the operator tooling uses (`CONTRACT_ID`, `IDENTITY`, `NETWORK`,
+ * `RPC_URL` / `STELLAR_RPC_URL`, `NETWORK_PASSPHRASE`).
  */
 
 import * as fs from "fs";
+
+import {
+  CliContext,
+  collectParamComparisons,
+  parseToml,
+} from "./vaultctl";
 
 interface VerificationResult {
   check: string;
@@ -18,112 +29,47 @@ interface VerificationResult {
   passed: boolean;
 }
 
-function parseToml(content: string): any {
-  const result: any = {};
-  let currentSection = "";
-
-  for (const line of content.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-
-    const sectionMatch = trimmed.match(/^\[(.+)\]$/);
-    if (sectionMatch) {
-      currentSection = sectionMatch[1];
-      result[currentSection] = {};
-      continue;
-    }
-
-    const kvMatch = trimmed.match(/^(\w+)\s*=\s*(.+)$/);
-    if (kvMatch && currentSection) {
-      let [, key, value] = kvMatch;
-      value = value.trim();
-
-      const commentIndex = value.indexOf("#");
-      if (commentIndex > 0) {
-        value = value.substring(0, commentIndex).trim();
-      }
-
-      if (value.startsWith('"') && value.endsWith('"')) {
-        result[currentSection][key] = value.slice(1, -1);
-      } else if (value.startsWith("[") && value.endsWith("]")) {
-        const items = value.slice(1, -1).split(",").map((s) => s.trim().replace(/"/g, ""));
-        result[currentSection][key] = items.filter((s) => s.length > 0);
-      } else if (value === "true" || value === "false") {
-        result[currentSection][key] = value === "true";
-      } else {
-        const num = Number(value);
-        result[currentSection][key] = isNaN(num) ? value : num;
-      }
-    }
-  }
-
-  return result;
+function argValue(args: string[], name: string): string | undefined {
+  const index = args.indexOf(name);
+  return index === -1 ? undefined : args[index + 1];
 }
 
-function verifyDeployment(config: any, contractId: string): VerificationResult[] {
-  const results: VerificationResult[] = [];
+function buildContext(args: string[], contractId: string): CliContext {
+  return {
+    contractId,
+    identity: argValue(args, "--identity") ?? process.env.IDENTITY ?? "",
+    network: argValue(args, "--network") ?? process.env.NETWORK ?? "testnet",
+    rpcUrl:
+      argValue(args, "--rpc-url") ?? process.env.RPC_URL ?? process.env.STELLAR_RPC_URL,
+    networkPassphrase:
+      argValue(args, "--network-passphrase") ??
+      process.env.NETWORK_PASSPHRASE ??
+      process.env.STELLAR_NETWORK_PASSPHRASE,
+    decimals: process.env.DECIMALS ? Number(process.env.DECIMALS) : 7,
+    dryRun: false,
+    iUnderstand: false,
+    format: "table",
+  };
+}
 
-  // Note: In a real implementation, these would query the contract on-chain
-  // For now, we compare config values and document the expected checks
+function verifyDeployment(ctx: CliContext, configPath: string): VerificationResult[] {
+  const config = parseToml(fs.readFileSync(configPath, "utf-8"));
 
-  // Check admin configuration
-  results.push({
-    check: "Admin addresses",
-    expected: config.admin?.admin_addresses?.join(", ") || "none",
-    actual: "(would query on-chain)",
-    passed: true,
-  });
+  // Reuse vaultctl's comparison logic — the same checks `vaultctl params diff`
+  // prints, so the two can never drift apart.
+  const results: VerificationResult[] = collectParamComparisons(ctx, config).map((c) => ({
+    check: `${c.label} (via ${c.read})`,
+    expected: c.expected,
+    actual: c.actual,
+    passed: c.passed,
+  }));
 
-  // Check token address
-  results.push({
-    check: "Token address",
-    expected: config.contract?.token_address || "none",
-    actual: "(would query on-chain)",
-    passed: true,
-  });
-
-  // Check vault parameters
-  results.push({
-    check: "Management fee (bps)",
-    expected: String(config.vault?.management_fee_bps),
-    actual: "(would query on-chain)",
-    passed: true,
-  });
-
-  results.push({
-    check: "Performance fee (bps)",
-    expected: String(config.vault?.performance_fee_bps),
-    actual: "(would query on-chain)",
-    passed: true,
-  });
-
-  results.push({
-    check: "Withdrawal fee (bps)",
-    expected: String(config.vault?.withdrawal_fee_bps),
-    actual: "(would query on-chain)",
-    passed: true,
-  });
-
-  // Check caps
-  results.push({
-    check: "Max deposit cap",
-    expected: String(config.vault?.max_deposit_cap),
-    actual: "(would query on-chain)",
-    passed: true,
-  });
-
-  results.push({
-    check: "Max withdrawal cap",
-    expected: String(config.vault?.max_withdrawal_cap),
-    actual: "(would query on-chain)",
-    passed: true,
-  });
-
-  // Check Wasm hash (from changelog)
+  // On-chain Wasm hash is not readable from the contract itself; the bytecode
+  // is verified separately by scripts/verify-build-reproducibility.sh.
   results.push({
     check: "Wasm hash",
-    expected: "(from changelog)",
-    actual: "(would query on-chain)",
+    expected: "(local reproducible build)",
+    actual: "(manual check — see scripts/verify-build-reproducibility.sh)",
     passed: true,
   });
 
@@ -160,29 +106,33 @@ function printResults(results: VerificationResult[]): boolean {
 
 // Main
 const args = process.argv.slice(2);
-const configIndex = args.indexOf("--config");
-const contractIndex = args.indexOf("--contract-id");
+const configPath = argValue(args, "--config") ?? process.env.CONFIG_PATH ?? "config/testnet.toml";
+const contractId = argValue(args, "--contract-id") ?? process.env.CONTRACT_ID ?? "";
 
-if (configIndex === -1 || contractIndex === -1) {
-  console.error("Usage: npx tsx scripts/verify-deployment.ts --config <config-path> --contract-id <id>");
+if (!contractId) {
+  console.error(
+    "Usage: npx tsx scripts/verify-deployment.ts --config <config-path> --contract-id <id>",
+  );
+  console.error("(or set $CONTRACT_ID)");
   process.exit(1);
 }
-
-const configPath = args[configIndex + 1];
-const contractId = args[contractIndex + 1];
 
 if (!fs.existsSync(configPath)) {
   console.error(`Config file not found: ${configPath}`);
   process.exit(1);
 }
 
-const content = fs.readFileSync(configPath, "utf-8");
-const config = parseToml(content);
+const ctx = buildContext(args, contractId);
+
+if (!ctx.identity) {
+  console.error("Error: --identity (or $IDENTITY) is required to query the contract.");
+  process.exit(1);
+}
 
 console.log(`Verifying deployment: ${contractId}`);
 console.log(`Using config: ${configPath}`);
 
-const results = verifyDeployment(config, contractId);
+const results = verifyDeployment(ctx, configPath);
 const allPassed = printResults(results);
 
 process.exit(allPassed ? 0 : 1);

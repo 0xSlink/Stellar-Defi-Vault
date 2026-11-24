@@ -1345,6 +1345,36 @@ pub enum VaultSafetyError {
     /// Returned by `close_dust_position()` while the position has escrowed
     /// rewards pending release, which closing would forfeit (issue #708).
     EscrowPending = 18,
+    /// Returned by the deposit gate when an allowlist root is configured but
+    /// the deposit was not accompanied by a valid Merkle proof (issue #872).
+    AllowlistProofRequired = 19,
+    /// Returned when a Merkle proof does not resolve to the stored root
+    /// (issues #872 and #873).
+    InvalidMerkleProof = 20,
+    /// Returned when a supplied Merkle proof exceeds the maximum supported
+    /// length (issues #872 and #873).
+    MerkleProofTooLong = 21,
+    /// Returned by `claim_distribution()` for an unknown distribution id
+    /// (issue #873).
+    DistributionNotFound = 22,
+    /// Returned by `claim_distribution()` after the distribution's expiry
+    /// ledger has passed (issue #873).
+    DistributionExpired = 23,
+    /// Returned by `recover_unclaimed()` before the distribution's expiry
+    /// ledger has passed (issue #873).
+    DistributionNotExpired = 24,
+    /// Returned by `claim_distribution()` when the leaf has already been
+    /// claimed (issue #873).
+    DistributionAlreadyClaimed = 25,
+    /// Returned by `recover_unclaimed()` when the remainder was already
+    /// recovered (issue #873).
+    DistributionAlreadyRecovered = 26,
+    /// Returned by `publish_distribution()` for a non-positive total or an
+    /// already-elapsed expiry (issue #873).
+    InvalidDistribution = 27,
+    /// Returned by `claim_distribution()` when paying the leaf would exceed the
+    /// distribution's escrowed total (issue #873).
+    InsufficientDistributionBalance = 28,
 }
 
 impl From<VaultError> for VaultSafetyError {

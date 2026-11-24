@@ -15672,11 +15672,9 @@ pub mod operator_slash;
 pub mod reward_projection;
 #[path = "reward_window.rs"]
 pub mod reward_window;
-#[path = "deposit_throughput.rs"]
-pub mod deposit_throughput;
-#[path = "share_price_bound.rs"]
-pub mod share_price_bound;
-#[path = "health_guard.rs"]
-pub mod health_guard;
-#[path = "deposit_waitlist.rs"]
-pub mod deposit_waitlist;
+#[path = "depositor_index.rs"]
+pub mod depositor_index;
+#[path = "allowlist_merkle.rs"]
+pub mod allowlist_merkle;
+#[path = "merkle_distributor.rs"]
+pub mod merkle_distributor;
