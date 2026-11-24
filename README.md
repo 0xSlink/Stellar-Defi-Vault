@@ -303,6 +303,49 @@ Pending reward: 0.1375000 (1375000 raw)
 Boost multiplier: 11000 bps
 ```
 
+## Operator CLI (`vaultctl`)
+
+[`scripts/vaultctl.ts`](./scripts/vaultctl.ts) is the typed operator CLI (issue
+#859). It replaces ad hoc `stellar contract invoke ...` shell snippets with one
+scriptable entry point covering the routine operator tasks:
+
+| Command                  | Purpose                                                        |
+| ------------------------ | -------------------------------------------------------------- |
+| `status`                 | Pool health snapshot: TVL, reward rate, reward pool, pause and insolvency flags, depositor count |
+| `solvency`               | Insolvency flag, share/deposit totals, insurance-fund balance  |
+| `config`                 | Dump the live on-chain configuration                           |
+| `params diff`            | Diff a deployment TOML config against on-chain parameters      |
+| `set-rate <bps>`         | Admin: set the reward rate                                     |
+| `fund <amount>`          | Admin: top up the reward pool (raw base units)                 |
+| `pause [reason] [msg]`   | Admin: pause the pool                                          |
+| `unpause`                | Admin: resume the pool                                         |
+
+It reads its target and keys from flags or the same environment variables the
+other operator scripts use (`CONTRACT_ID`, `IDENTITY`, `NETWORK`,
+`RPC_URL`/`STELLAR_RPC_URL`, `NETWORK_PASSPHRASE`, `DECIMALS`):
+
+```bash
+CONTRACT_ID=CB...YOUR_CONTRACT_ID IDENTITY=ops npx tsx scripts/vaultctl.ts status
+npx tsx scripts/vaultctl.ts --json status            # machine-readable output
+npx tsx scripts/vaultctl.ts params diff --config config/testnet.toml
+```
+
+**Safety.** Every mutating command is *simulated first* (`--send=no`) and only
+submitted (`--send=yes`) once the simulation succeeds. Add `--dry-run` to stop
+after the simulation and never submit. A write against mainnet additionally
+requires an explicit `--i-understand` acknowledgement:
+
+```bash
+npx tsx scripts/vaultctl.ts --dry-run set-rate 500
+npx tsx scripts/vaultctl.ts --network mainnet --rpc-url https://... --i-understand pause Maintenance "scheduled upgrade"
+```
+
+`params diff` exits `1` when any compared parameter differs from the config
+file, `2` on a usage/runtime error, and `0` otherwise — handy as a CI gate.
+[`scripts/verify-deployment.ts`](./scripts/verify-deployment.ts) imports the
+same comparison helpers, so post-deployment checks and `vaultctl params diff`
+can never drift apart.
+
 ## Reward Pool Runway Simulation
 
 [`scripts/runway-sim.ts`](./scripts/runway-sim.ts) projects when the reward

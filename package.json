@@ -6,6 +6,7 @@
     "invariant-sweep": "tsx scripts/invariant-sweep.ts",
     "soak-testnet": "tsx scripts/soak-testnet.ts",
     "fee-bump-deposit": "tsx scripts/fee-bump-deposit.ts",
+    "vaultctl": "tsx scripts/vaultctl.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
