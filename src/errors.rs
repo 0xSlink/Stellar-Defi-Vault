@@ -1345,6 +1345,32 @@ pub enum VaultSafetyError {
     /// Returned by `close_dust_position()` while the position has escrowed
     /// rewards pending release, which closing would forfeit (issue #708).
     EscrowPending = 18,
+    /// Returned by `enter_insolvency_mode()` when the solvency report shows no
+    /// deficit, so there is no shortfall to share (issue #833).
+    InsolvencyNotDetected = 19,
+    /// Returned by `enter_insolvency_mode()` when the mode is already active
+    /// (issue #833).
+    InsolvencyAlreadyActive = 20,
+    /// Returned by `exit_insolvency_mode()` when the mode is not active
+    /// (issue #833).
+    InsolvencyNotActive = 21,
+    /// Returned by `set_claim_split()` with zero recipients or more than the
+    /// four-recipient cap (issue #831).
+    InvalidClaimSplitCount = 22,
+    /// Returned by `set_claim_split()` when the recipient shares do not sum to
+    /// 10 000 bps (issue #831).
+    InvalidClaimSplitTotal = 23,
+    /// Returned by `set_recurring_deposit()` with a zero interval (issue #832).
+    InvalidRecurringInterval = 24,
+    /// Returned by `set_recurring_deposit()` with a zero execution cap
+    /// (issue #832).
+    InvalidRecurringExecutions = 25,
+    /// Returned by `execute_recurring_deposit()` when the user has no
+    /// scheduled deposit (issue #832).
+    RecurringDepositNotFound = 26,
+    /// Returned by `execute_recurring_deposit()` before the deposit's next due
+    /// ledger has been reached (issue #832).
+    RecurringDepositNotDue = 27,
 }
 
 impl From<VaultError> for VaultSafetyError {
