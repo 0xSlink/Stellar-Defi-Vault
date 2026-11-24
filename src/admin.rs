@@ -1,4 +1,4 @@
-use crate::errors::VaultError;
+use crate::errors::{VaultError, VaultSafetyError};
 use crate::storage::{AdminKey, DataKey, StorageKey};
 use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
@@ -12,6 +12,24 @@ pub fn require_admin_as(env: &Env, claimed_admin: &Address) -> Result<(), VaultE
     }
     admin.require_auth();
     Ok(())
+}
+
+/// Issues #830, #833: authorize an action that the stored admin *or* the
+/// stored guardian may perform. Used by the emergency controls (rewards pause,
+/// insolvency mode) that a guardian must be able to trigger without a full
+/// admin key. `caller` must sign; when `caller` is neither authority the call
+/// fails with `Unauthorized`.
+pub fn require_admin_or_guardian(env: &Env, caller: &Address) -> Result<(), VaultSafetyError> {
+    if require_admin_as(env, caller).is_ok() {
+        return Ok(());
+    }
+    match crate::guardian_pause::get_guardian(env) {
+        Some(guardian) if &guardian == caller => {
+            caller.require_auth();
+            Ok(())
+        }
+        _ => Err(VaultSafetyError::Unauthorized),
+    }
 }
 
 /// Reads the currently proposed pending administrator, if any (Issue #738).
